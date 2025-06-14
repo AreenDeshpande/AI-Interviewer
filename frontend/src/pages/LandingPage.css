@@ -1,0 +1,64 @@
+.landing-container {
+  padding-top: 0; /* Remove top padding as container adds margin */
+}
+
+.hero-section {
+  /* Subtle Gradient Background */
+  background: linear-gradient(135deg, var(--primary-blue-lightest) 0%, var(--background-main) 100%);
+  padding: 5rem 2rem; /* More padding */
+  border-radius: 16px; /* More rounded corners */
+  margin-bottom: 4rem; /* More space below hero */
+  text-align: center;
+  border: 1px solid var(--primary-blue-lighter);
+}
+
+.hero-section h1 {
+  color: var(--dark-blue);
+  font-size: 3rem; /* Larger */
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.hero-section .subtitle {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  max-width: 600px; /* Limit subtitle width */
+  margin: 0 auto 2rem auto; /* Center and add bottom margin */
+}
+
+.hero-section .btn {
+    padding: 1rem 2rem; /* Larger button */
+    font-size: 1.1rem;
+}
+
+.features-section h2 {
+  font-size: 2rem;
+  color: var(--dark-blue);
+  margin-bottom: 3rem; /* More space */
+  text-align: center;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 2rem; /* More gap */
+}
+
+/* Add subtle icon indication (requires adding icons in JS) */
+.features-grid .card::before {
+  /* content: '✔'; /* Placeholder: Replace with actual icon */
+  /* display: block;
+  font-size: 1.5rem;
+  color: var(--primary-blue);
+  margin-bottom: 0.75rem; */
+}
+
+.features-grid .card h3 {
+  margin-top: 0.5rem; /* Space after icon */
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem; /* Slightly larger card titles */
+}
+.features-grid .card p {
+    color: var(--text-light);
+    font-size: 0.95rem;
+} 

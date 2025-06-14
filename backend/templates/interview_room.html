@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Video Interview</title>
+    <script src="https://sdk.twilio.com/js/video/releases/2.24.0/twilio-video.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .video-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .video-participant {
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .video-participant video {
+            width: 100%;
+            height: 400px;
+            object-fit: cover;
+        }
+        .participant-label {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        .bot-participant {
+            background: #2c3e50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .bot-avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            margin-right: 20px;
+        }
+        .bot-info {
+            color: white;
+        }
+        .bot-name {
+            font-size: 1.5em;
+            margin-bottom: 5px;
+        }
+        .bot-status {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+        .status-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        .status-indicator.connected {
+            background: #28a745;
+        }
+        .status-indicator.disconnected {
+            background: #dc3545;
+        }
+        .status-indicator.speaking {
+            background: #ffc107;
+            animation: pulse 1s infinite;
+        }
+        .status-indicator.listening {
+            background: #17a2b8;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        .current-question {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .question-text {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+        .question-progress {
+            font-size: 0.9em;
+            color: #666;
+        }
+        .bot-message {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .end-btn {
+            background: #dc3545;
+            color: white;
+        }
+        .end-btn:hover {
+            background: #c82333;
+        }
+        .end-btn:disabled {
+            background: #e9ecef;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AI Video Interview</h1>
+        
+        <div class="status-container">
+            <div class="status">
+                <div class="status-indicator disconnected" id="connection-status-indicator"></div>
+                <span id="connection-status">Connecting...</span>
+            </div>
+        </div>
+        
+        <div class="video-container">
+            <div class="video-participant">
+                <video id="local-video" autoplay muted></video>
+                <div class="participant-label">You</div>
+            </div>
+            <div class="video-participant bot-participant">
+                <img src="{{ bot_avatar }}" alt="{{ bot_name }}" class="bot-avatar">
+                <div class="bot-info">
+                    <div class="bot-name">{{ bot_name }}</div>
+                    <div class="bot-status" id="bot-status">Waiting to connect...</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="current-question">
+            <div class="question-text" id="current-question">Waiting for interview to begin...</div>
+            <div class="question-progress" id="question-progress"></div>
+        </div>
+        
+        <div class="controls">
+            <button class="end-btn" id="end-btn" disabled>End Interview</button>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const token = '{{ token }}';
+        const roomName = '{{ room_name }}';
+        const interviewId = '{{ interview_id }}';
+        const questions = {{ questions|tojson }};
+        
+        // DOM Elements
+        const localVideo = document.getElementById('local-video');
+        const connectionStatus = document.getElementById('connection-status');
+        const connectionStatusIndicator = document.getElementById('connection-status-indicator');
+        const botStatus = document.getElementById('bot-status');
+        const currentQuestionEl = document.getElementById('current-question');
+        const questionProgressEl = document.getElementById('question-progress');
+        const endBtn = document.getElementById('end-btn');
+        
+        let room = null;
+        let localTrack = null;
+        let isSpeaking = false;
+        let currentQuestionIndex = 0;
+        
+        // Connect to Twilio Video
+        async function connectToRoom() {
+            try {
+                // Get local video track
+                localTrack = await Twilio.Video.createLocalVideoTrack();
+                localVideo.srcObject = localTrack.mediaStream;
+                
+                // Connect to room
+                room = await Twilio.Video.connect(token, {
+                    name: roomName,
+                    tracks: [localTrack],
+                    audio: true,
+                    video: true
+                });
+                
+                updateConnectionStatus('connected');
+                
+                // Handle remote participant (bot)
+                room.on('participantConnected', participant => {
+                    if (participant.identity.startsWith('bot_')) {
+                        updateBotStatus('Connected');
+                        
+                        // Monitor bot's audio track
+                        participant.tracks.forEach(publication => {
+                            if (publication.kind === 'audio') {
+                                publication.track.on('started', () => {
+                                    updateBotStatus('Speaking');
+                                    connectionStatusIndicator.className = 'status-indicator speaking';
+                                });
+                                publication.track.on('ended', () => {
+                                    updateBotStatus('Listening');
+                                    connectionStatusIndicator.className = 'status-indicator listening';
+                                });
+                            }
+                        });
+                    }
+                });
+                
+                // Handle participant disconnection
+                room.on('participantDisconnected', participant => {
+                    if (participant.identity.startsWith('bot_')) {
+                        updateBotStatus('Disconnected');
+                        endInterview();
+                    }
+                });
+                
+                // Monitor local audio for speech
+                room.localParticipant.audioTracks.forEach(publication => {
+                    publication.track.on('started', () => {
+                        isSpeaking = true;
+                        updateBotStatus('Listening to your response...');
+                        connectionStatusIndicator.className = 'status-indicator listening';
+                    });
+                    publication.track.on('ended', () => {
+                        isSpeaking = false;
+                        updateBotStatus('Processing your response...');
+                        connectionStatusIndicator.className = 'status-indicator connected';
+                    });
+                });
+                
+                // Enable end button
+                endBtn.disabled = false;
+                
+                // Start polling for interview status
+                startStatusPolling();
+                
+            } catch (error) {
+                console.error('Error connecting to room:', error);
+                updateConnectionStatus('failed', error.message);
+            }
+        }
+        
+        function updateConnectionStatus(status, message = '') {
+            connectionStatusIndicator.className = `status-indicator ${status}`;
+            connectionStatus.textContent = message || status.charAt(0).toUpperCase() + status.slice(1);
+        }
+        
+        function updateBotStatus(status) {
+            botStatus.textContent = status;
+            // Add status message to UI
+            const messageEl = document.createElement('div');
+            messageEl.className = 'bot-message';
+            messageEl.textContent = status;
+            currentQuestionEl.appendChild(messageEl);
+            // Remove old messages after 5 seconds
+            setTimeout(() => messageEl.remove(), 5000);
+        }
+        
+        function updateQuestionProgress(index) {
+            currentQuestionIndex = index;
+            const question = questions[index];
+            currentQuestionEl.querySelector('.question-text').textContent = question;
+            questionProgressEl.textContent = `Question ${index + 1} of ${questions.length}`;
+        }
+        
+        async function startStatusPolling() {
+            const pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/interview-status/${interviewId}`);
+                    const data = await response.json();
+                    
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+                        endInterview();
+                        return;
+                    }
+                    
+                    if (data.current_question_index !== undefined) {
+                        updateQuestionProgress(data.current_question_index);
+                    }
+                    
+                } catch (error) {
+                    console.error('Error polling interview status:', error);
+                }
+            }, 1000); // Poll every second
+            
+            // Clean up interval when leaving
+            window.addEventListener('beforeunload', () => clearInterval(pollInterval));
+        }
+        
+        async function endInterview() {
+            try {
+                // Update interview status
+                await fetch(`/api/interview-status/${interviewId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        status: 'completed',
+                        recording_url: room.recordingUrl
+                    })
+                });
+                
+                // Disconnect from room
+                if (room) {
+                    room.disconnect();
+                }
+                if (localTrack) {
+                    localTrack.stop();
+                }
+                
+                // Update UI
+                updateConnectionStatus('disconnected');
+                updateBotStatus('Interview completed. Thank you!');
+                currentQuestionEl.querySelector('.question-text').textContent = 'Interview completed. Thank you!';
+                endBtn.disabled = true;
+                
+            } catch (error) {
+                console.error('Error ending interview:', error);
+            }
+        }
+        
+        // Event listeners
+        endBtn.addEventListener('click', endInterview);
+        
+        // Start connection
+        connectToRoom();
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (room) {
+                room.disconnect();
+            }
+            if (localTrack) {
+                localTrack.stop();
+            }
+        });
+    </script>
+</body>
+</html> 

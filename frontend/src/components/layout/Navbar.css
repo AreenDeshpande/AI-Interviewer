@@ -1,0 +1,130 @@
+.navbar {
+  background-color: rgba(255, 255, 255, 0.95); /* Slight transparency */
+  backdrop-filter: blur(8px); /* Blur effect */
+  -webkit-backdrop-filter: blur(8px);
+  height: 70px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 1rem; /* Adjusted base size */
+  position: sticky;
+  top: 0;
+  z-index: 1000; /* Ensure it's above other content */
+  box-shadow: var(--shadow-sm); /* Softer shadow */
+  border-bottom: 1px solid var(--border-color);
+}
+
+.navbar-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 70px;
+  width: 100%;
+  max-width: 1140px; /* Match container */
+  padding: 0 1.5rem; /* Match container */
+}
+
+.navbar-logo {
+  color: var(--dark-blue);
+  justify-self: start;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 1.7rem;
+  font-weight: 700; /* Bolder logo */
+  display: flex;
+  align-items: center;
+  transition: color 0.3s ease;
+}
+.navbar-logo:hover {
+    color: var(--primary-blue);
+}
+
+.nav-menu {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  text-align: center;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item {
+  height: 70px;
+  display: flex;
+  align-items: center;
+}
+
+.nav-links {
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  padding: 0 1.2rem; /* Adjusted padding */
+  height: 100%;
+  position: relative; /* For pseudo-element */
+  border-bottom: none; /* Remove previous border */
+  transition: color 0.2s ease;
+  font-weight: 500;
+}
+/* Underline effect */
+.nav-links::after {
+    content: '';
+    position: absolute;
+    bottom: 15px; /* Position underline */
+    left: 1.2rem;
+    right: 1.2rem;
+    height: 2px;
+    background-color: var(--primary-blue);
+    transform: scaleX(0);
+    transform-origin: center;
+    transition: transform 0.3s ease-out;
+}
+
+.nav-links:hover,
+.nav-links.active {
+  color: var(--primary-blue);
+}
+
+.nav-links:hover::after,
+.nav-links.active::after {
+    transform: scaleX(1); /* Animate underline */
+}
+
+.nav-links.active {
+    font-weight: 600; /* Make active link slightly bolder */
+}
+
+/* Adjust button alignment and spacing */
+.nav-menu .nav-item:has(> a > .btn),
+.nav-menu .nav-item:has(> .logout-button) {
+    margin-left: 1.5rem; /* More space */
+}
+
+/* Ensure buttons in navbar look consistent */
+.nav-menu .btn {
+    padding: 0.6rem 1.2rem; /* Adjust padding for navbar context */
+    font-size: 0.9rem;
+}
+
+.logout-button {
+   /* Specific styles for logout if needed, using secondary variant now */
+}
+
+/* Basic Mobile Menu Styles (Add toggle logic in JS) */
+.menu-icon {
+  display: none;
+}
+
+@media screen and (max-width: 960px) {
+  /* Example: Hide menu, show icon - requires JS for functionality */
+  .nav-menu { display: none; }
+  .menu-icon {
+    display: block;
+    font-size: 1.8rem; /* Adjust icon size */
+    cursor: pointer;
+    color: var(--dark-blue);
+   }
+  .navbar-container {
+    padding: 0 1rem; /* Adjust padding for mobile */
+  }
+} 

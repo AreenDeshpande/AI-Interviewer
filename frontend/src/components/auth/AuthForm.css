@@ -1,0 +1,66 @@
+.auth-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start; /* Align top for shorter forms */
+  padding: 3rem 1rem;
+  min-height: calc(100vh - 120px); /* Adjust based on nav height */
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 450px; /* Slightly wider */
+  border-radius: 12px; /* Match global card style */
+}
+
+.auth-card h2 {
+  text-align: center;
+  margin-bottom: 2rem; /* More space */
+  font-size: 1.75rem; /* Larger heading */
+}
+
+.form-group {
+  margin-bottom: 1.5rem; /* More space between fields */
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 0.8rem 1rem; /* More padding */
+  border: 1px solid var(--border-color);
+  border-radius: 8px; /* Match button rounding */
+  font-size: 1rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  background-color: #fff; /* Ensure white background */
+}
+.form-group input:focus {
+  outline: none;
+  border-color: var(--primary-blue);
+  /* More prominent focus ring */
+  box-shadow: 0 0 0 3px var(--primary-blue-lighter);
+}
+.form-group input::placeholder {
+    color: var(--text-light);
+}
+
+.auth-button {
+    width: 100%;
+    margin-top: 1rem; /* Space above button */
+    padding: 0.9rem 1.5rem; /* Slightly larger auth button */
+}
+
+.auth-switch-link {
+  text-align: center;
+  margin-top: 1.8rem; /* More space */
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+.auth-switch-link a {
+    font-weight: 500;
+} 

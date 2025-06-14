@@ -1,0 +1,52 @@
+.btn {
+  display: inline-block;
+  padding: 0.8rem 1.6rem; /* Slightly larger padding */
+  border: none;
+  border-radius: 8px; /* Match card rounding */
+  font-size: 0.95rem; /* Slightly adjusted size */
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  text-align: center;
+  white-space: nowrap; /* Prevent text wrapping */
+  line-height: 1.4; /* Ensure consistent height */
+  /* Add focus-visible for keyboard navigation */
+  outline: none;
+}
+
+.btn:focus-visible {
+  box-shadow: 0 0 0 3px var(--primary-blue-lighter);
+}
+
+.btn-primary {
+  background-color: var(--primary-blue);
+  color: white;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--primary-blue-dark);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px); /* Subtle lift */
+}
+
+.btn-secondary {
+  background-color: var(--primary-blue-lightest);
+  color: var(--primary-blue-dark);
+  border: 1px solid var(--primary-blue-lighter);
+  box-shadow: none;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--primary-blue-lighter);
+  border-color: var(--primary-blue-light);
+  transform: translateY(-1px);
+}
+
+.btn:disabled {
+  background-color: #cbd5e1; /* Lighter gray */
+  color: #94a3b8; /* Darker gray text on disabled */
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+} 
