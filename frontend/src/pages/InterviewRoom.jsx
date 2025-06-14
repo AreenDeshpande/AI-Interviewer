@@ -334,29 +334,78 @@ const InterviewRoom = () => {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      console.log('Starting audio recording...');
+      
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 16000
+        }
+      });
+      
+      console.log('Got media stream');
+      
+      // Use webm format as it's more widely supported
+      const options = {
+        mimeType: 'audio/webm;codecs=opus'
+      };
+      
+      // Fallback if webm is not supported
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          options.mimeType = 'audio/wav';
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            delete options.mimeType; // Use default
+          }
+        }
+      }
+      
+      console.log('Using MIME type:', options.mimeType || 'default');
+      
+      const recorder = new MediaRecorder(stream, options);
       const chunks = [];
 
       recorder.ondataavailable = (event) => {
+        console.log('Data available, size:', event.data.size);
         if (event.data.size > 0) {
           chunks.push(event.data);
         }
       };
 
       recorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/wav' });
-        await uploadRecording(audioBlob);
+        console.log('Recording stopped, chunks:', chunks.length);
+        const mimeType = recorder.mimeType || 'audio/webm';
+        const audioBlob = new Blob(chunks, { type: mimeType });
+        console.log('Created blob, size:', audioBlob.size, 'type:', audioBlob.type);
+        
+        if (audioBlob.size > 0) {
+          await uploadRecording(audioBlob);
+        } else {
+          console.error('No audio data recorded');
+          alert('No audio was recorded. Please try again.');
+        }
+        
         stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event.error);
+        alert('Recording error occurred. Please try again.');
       };
 
       setMediaRecorder(recorder);
       setRecordedChunks(chunks);
-      recorder.start();
+      
+      console.log('Starting recorder...');
+      recorder.start(1000); // Collect data every second
       setIsRecording(true);
 
       // Auto-stop recording after 2 minutes
       recordingTimeoutRef.current = setTimeout(() => {
+        console.log('Auto-stopping recording after timeout');
         if (recorder.state === 'recording') {
           stopRecording();
         }
@@ -364,7 +413,7 @@ const InterviewRoom = () => {
 
     } catch (error) {
       console.error('Error starting recording:', error);
-      alert('Could not start recording. Please check microphone permissions.');
+      alert(`Could not start recording: ${error.message}. Please check microphone permissions.`);
     }
   };
 
@@ -380,24 +429,51 @@ const InterviewRoom = () => {
 
   const uploadRecording = async (audioBlob) => {
     try {
+      console.log('Uploading audio blob, size:', audioBlob.size, 'type:', audioBlob.type);
+      
       // Convert blob to base64
       const reader = new FileReader();
       reader.onloadend = async () => {
-        const base64Audio = reader.result;
+        try {
+          const base64Audio = reader.result;
+          console.log('Base64 audio length:', base64Audio.length);
 
-        const response = await api.post(
-          `/interview/${interviewId}/record-response`,
-          {
-            question_index: questionIndex,
-            audio_blob: base64Audio
+          const response = await api.post(
+            `/interview/${interviewId}/record-response`,
+            {
+              question_index: questionIndex,
+              audio_blob: base64Audio
+            }
+          );
+
+          console.log('Recording uploaded and transcribed:', response.data);
+          
+          // Show transcription to user for verification
+          if (response.data.transcription) {
+            const transcriptionPreview = response.data.transcription.length > 100 
+              ? response.data.transcription.substring(0, 100) + '...' 
+              : response.data.transcription;
+            
+            console.log('Transcription:', transcriptionPreview);
+            // You could show this in a toast notification if desired
           }
-        );
 
-        console.log('Recording uploaded and transcribed:', response.data);
-
-        // Move to next question after successful recording
-        handleNextQuestion();
+          // Move to next question after successful recording
+          setTimeout(() => {
+            handleNextQuestion();
+          }, 1000); // Small delay to let user see the result
+          
+        } catch (uploadError) {
+          console.error('Error in upload request:', uploadError);
+          alert(`Failed to upload recording: ${uploadError.response?.data?.message || uploadError.message}`);
+        }
       };
+      
+      reader.onerror = (error) => {
+        console.error('Error reading audio file:', error);
+        alert('Failed to process audio file. Please try again.');
+      };
+      
       reader.readAsDataURL(audioBlob);
     } catch (error) {
       console.error('Error uploading recording:', error);

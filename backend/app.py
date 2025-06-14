@@ -209,27 +209,58 @@ def get_next_question(interview_id, current_question_index):
 def transcribe_audio(audio_file_path):
     """Transcribe audio file to text using speech recognition."""
     try:
-        # Initialize recognizer
+        # Initialize recognizer with adjusted settings
         r = sr.Recognizer()
+        r.energy_threshold = 300
+        r.dynamic_energy_threshold = True
+        r.pause_threshold = 0.8
+        r.operation_timeout = None
+        r.phrase_threshold = 0.3
+        r.non_speaking_duration = 0.8
         
         # Convert audio to wav format if needed
         audio = AudioSegment.from_file(audio_file_path)
-        wav_path = audio_file_path.replace('.mp3', '.wav').replace('.m4a', '.wav')
+        
+        # Normalize audio levels
+        audio = audio.normalize()
+        
+        # Ensure proper format for speech recognition
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        
+        wav_path = audio_file_path.replace('.mp3', '.wav').replace('.m4a', '.wav').replace('.webm', '.wav')
         audio.export(wav_path, format="wav")
         
-        # Transcribe audio
+        # Transcribe audio with multiple attempts
         with sr.AudioFile(wav_path) as source:
+            # Adjust for ambient noise
+            r.adjust_for_ambient_noise(source, duration=0.5)
             audio_data = r.record(source)
-            text = r.recognize_google(audio_data)
             
-        # Clean up temporary wav file
-        if wav_path != audio_file_path:
-            os.remove(wav_path)
+            # Try Google Speech Recognition first
+            try:
+                text = r.recognize_google(audio_data, language='en-US')
+                print(f"Google Speech Recognition result: {text}")
+                return text
+            except sr.UnknownValueError:
+                print("Google Speech Recognition could not understand audio")
+                return "Could not understand audio - please speak more clearly"
+            except sr.RequestError as e:
+                print(f"Could not request results from Google Speech Recognition service; {e}")
+                # Fallback to basic text if service is unavailable
+                return "Audio was recorded but transcription service is unavailable"
             
-        return text
     except Exception as e:
         print(f"Error transcribing audio: {str(e)}")
-        return None
+        import traceback
+        print(traceback.format_exc())
+        return f"Error during transcription: {str(e)}"
+    finally:
+        # Clean up temporary wav file
+        try:
+            if 'wav_path' in locals() and wav_path != audio_file_path and os.path.exists(wav_path):
+                os.remove(wav_path)
+        except Exception as cleanup_error:
+            print(f"Error cleaning up temp file: {cleanup_error}")
 
 def generate_interview_report(interview_data):
     """Generate interview report using OpenAI."""
@@ -907,44 +938,85 @@ def record_response(interview_id):
         if not audio_blob:
             return jsonify({'message': 'No audio data provided'}), 400
         
-        # Save audio file temporarily
-        import base64
-        audio_data = base64.b64decode(audio_blob.split(',')[1])  # Remove data:audio/wav;base64, prefix
-        temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.wav")
+        print(f"Processing audio for question {question_index} in interview {interview_id}")
         
-        with open(temp_audio_path, 'wb') as f:
-            f.write(audio_data)
+        # Save audio file temporarily with proper extension
+        import base64
+        try:
+            # Handle different audio formats
+            if 'data:audio/webm' in audio_blob:
+                audio_data = base64.b64decode(audio_blob.split(',')[1])
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.webm")
+            elif 'data:audio/wav' in audio_blob:
+                audio_data = base64.b64decode(audio_blob.split(',')[1])
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.wav")
+            else:
+                # Default to webm
+                audio_data = base64.b64decode(audio_blob.split(',')[1])
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.webm")
+            
+            print(f"Saving audio to: {temp_audio_path}")
+            print(f"Audio data size: {len(audio_data)} bytes")
+            
+            with open(temp_audio_path, 'wb') as f:
+                f.write(audio_data)
+            
+            # Verify file was written
+            if not os.path.exists(temp_audio_path) or os.path.getsize(temp_audio_path) == 0:
+                return jsonify({'message': 'Failed to save audio file'}), 500
+            
+            print(f"Audio file saved successfully, size: {os.path.getsize(temp_audio_path)} bytes")
+            
+        except Exception as audio_error:
+            print(f"Error saving audio: {audio_error}")
+            return jsonify({'message': f'Error saving audio: {str(audio_error)}'}), 500
         
         # Transcribe audio
+        print("Starting transcription...")
         transcription = transcribe_audio(temp_audio_path)
+        print(f"Transcription result: {transcription}")
         
         # Clean up temporary file
-        os.remove(temp_audio_path)
+        try:
+            if os.path.exists(temp_audio_path):
+                os.remove(temp_audio_path)
+                print("Temporary audio file cleaned up")
+        except Exception as cleanup_error:
+            print(f"Error cleaning up audio file: {cleanup_error}")
         
         if not transcription:
-            return jsonify({'message': 'Failed to transcribe audio'}), 500
+            transcription = "No speech detected in audio recording"
         
         # Store transcription in database
         response_data = {
             'question_index': question_index,
-            'question': interview['questions'][question_index],
+            'question': interview['questions'][question_index] if question_index < len(interview.get('questions', [])) else 'Unknown question',
             'transcription': transcription,
-            'timestamp': datetime.now(timezone.utc)
+            'timestamp': datetime.now(timezone.utc),
+            'audio_processed': True
         }
         
+        print(f"Storing response data: {response_data}")
+        
         # Update interview with response
-        db.interviews.update_one(
+        result = db.interviews.update_one(
             {'interview_id': interview_id},
             {'$push': {'responses': response_data}}
         )
         
+        print(f"Database update result: modified_count={result.modified_count}")
+        
         return jsonify({
             'message': 'Response recorded and transcribed successfully',
-            'transcription': transcription
+            'transcription': transcription,
+            'question_index': question_index,
+            'audio_size': len(audio_data)
         })
         
     except Exception as e:
         print(f"Error recording response: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return jsonify({'message': f'Error: {str(e)}'}), 500
 
 @app.route('/interview/<interview_id>/complete', methods=['POST'])
