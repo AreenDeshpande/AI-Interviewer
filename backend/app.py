@@ -236,10 +236,20 @@ def generate_interview_report(interview_data):
     try:
         # Prepare interview data for analysis
         qa_pairs = []
-        for i, response in enumerate(interview_data.get('responses', [])):
-            question = interview_data['questions'][i] if i < len(interview_data['questions']) else f"Question {i+1}"
-            answer = response.get('transcription', 'No response recorded')
-            qa_pairs.append(f"Q: {question}\nA: {answer}")
+        questions = interview_data.get('questions', [])
+        responses = interview_data.get('responses', [])
+        
+        # Create Q&A pairs
+        for i, question in enumerate(questions):
+            # Find corresponding response
+            response = None
+            for r in responses:
+                if r.get('question_index') == i:
+                    response = r
+                    break
+            
+            answer = response.get('transcription', 'No response recorded') if response else 'No response recorded'
+            qa_pairs.append(f"Q{i+1}: {question}\nA{i+1}: {answer}")
         
         interview_text = "\n\n".join(qa_pairs)
         
@@ -258,7 +268,7 @@ Structure your response as follows:
 6. OVERALL RECOMMENDATION (Recommend/Consider/Not Recommend)
 7. SCORE (out of 10)
 
-Be professional, constructive, and specific in your feedback."""},
+Be professional, constructive, and specific in your feedback. If responses are missing or incomplete, note this and provide guidance on what additional information would be helpful."""},
                 {"role": "user", "content": f"Please analyze this interview and provide a detailed assessment report:\n\n{interview_text}"}
             ],
             temperature=0.3,
@@ -267,8 +277,35 @@ Be professional, constructive, and specific in your feedback."""},
         
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Error generating report: {str(e)}")
-        return None
+        print(f"Error generating report with OpenAI: {str(e)}")
+        # Return a fallback report if OpenAI fails
+        questions = interview_data.get('questions', [])
+        responses = interview_data.get('responses', [])
+        
+        fallback_report = f"""
+INTERVIEW ASSESSMENT REPORT
+
+CANDIDATE OVERVIEW:
+The candidate participated in an AI-conducted interview with {len(questions)} questions.
+{len(responses)} responses were recorded.
+
+TECHNICAL ASSESSMENT:
+Unable to perform automated analysis due to system limitations.
+
+COMMUNICATION SKILLS:
+Manual review required for assessment.
+
+RESPONSES SUMMARY:
+"""
+        
+        for i, question in enumerate(questions):
+            response = next((r for r in responses if r.get('question_index') == i), None)
+            answer = response.get('transcription', 'No response') if response else 'No response'
+            fallback_report += f"\nQ{i+1}: {question}\nA{i+1}: {answer[:100]}{'...' if len(answer) > 100 else ''}\n"
+        
+        fallback_report += "\n\nRECOMMENDATION: Manual review required\nSCORE: Pending detailed analysis"
+        
+        return fallback_report
 
 def create_pdf_report(report_content, candidate_name="Candidate"):
     """Create PDF report from text content."""
@@ -922,19 +959,63 @@ def complete_interview(interview_id):
         # Get user details
         user = db.users.find_one({'_id': interview['user_id']})
         candidate_name = user.get('name', 'Candidate') if user else 'Candidate'
+        candidate_email = user.get('email', 'unknown@email.com') if user else 'unknown@email.com'
+        
+        # Check if interview has responses, if not create a basic structure
+        responses = interview.get('responses', [])
+        if not responses:
+            # Create dummy responses if none exist
+            questions = interview.get('questions', [])
+            responses = []
+            for i, question in enumerate(questions):
+                responses.append({
+                    'question_index': i,
+                    'question': question,
+                    'transcription': 'No response recorded',
+                    'timestamp': datetime.now(timezone.utc)
+                })
+            
+            # Update interview with dummy responses
+            db.interviews.update_one(
+                {'interview_id': interview_id},
+                {'$set': {'responses': responses}}
+            )
+            interview['responses'] = responses
         
         # Generate report
         report_content = generate_interview_report(interview)
         if not report_content:
-            return jsonify({'message': 'Failed to generate report'}), 500
+            # Create a basic report if AI generation fails
+            report_content = f"""
+INTERVIEW ASSESSMENT REPORT
+
+CANDIDATE: {candidate_name}
+EMAIL: {candidate_email}
+DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+INTERVIEW SUMMARY:
+The candidate participated in an AI-conducted interview session. Due to technical limitations, 
+detailed analysis could not be completed automatically.
+
+QUESTIONS ASKED:
+{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(interview.get('questions', []))])}
+
+RESPONSES:
+{chr(10).join([f"Q{r.get('question_index', 0)+1}: {r.get('transcription', 'No response')}" for r in responses])}
+
+RECOMMENDATION:
+Manual review recommended for final assessment.
+
+SCORE: Pending manual review
+"""
         
         # Create PDF report
         pdf_buffer = create_pdf_report(report_content, candidate_name)
-        if not pdf_buffer:
-            return jsonify({'message': 'Failed to create PDF report'}), 500
         
         # Send email with report
-        email_sent = send_report_email(pdf_buffer, candidate_name)
+        email_sent = False
+        if pdf_buffer:
+            email_sent = send_report_email(pdf_buffer, candidate_name)
         
         # Update interview status
         db.interviews.update_one(
@@ -952,12 +1033,17 @@ def complete_interview(interview_id):
             'message': 'Interview completed successfully',
             'report_generated': True,
             'email_sent': email_sent,
-            'report_preview': report_content[:500] + '...' if len(report_content) > 500 else report_content
+            'candidate_name': candidate_name,
+            'total_questions': len(interview.get('questions', [])),
+            'total_responses': len(responses),
+            'report_preview': report_content[:300] + '...' if len(report_content) > 300 else report_content
         })
         
     except Exception as e:
         print(f"Error completing interview: {str(e)}")
-        return jsonify({'message': f'Error: {str(e)}'}), 500
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({'message': f'Error completing interview: {str(e)}'}), 500
 
 @app.route('/interview/<interview_id>/next-question', methods=['POST'])
 def next_question(interview_id):

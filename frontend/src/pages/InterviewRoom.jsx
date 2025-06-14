@@ -248,6 +248,14 @@ const InterviewRoom = () => {
           const newQuestionIndex = current_question_index;
           if (newQuestionIndex !== questionIndex) {
             setQuestionIndex(newQuestionIndex);
+            
+            // Check if we've reached the end of questions
+            if (newQuestionIndex >= questions.length) {
+              setHasMoreQuestions(false);
+              handleEndInterview();
+              return;
+            }
+            
             const question = questions[newQuestionIndex];
             setCurrentQuestion(question);
 
@@ -266,6 +274,7 @@ const InterviewRoom = () => {
 
   const handleEndInterview = async () => {
     try {
+      // Disconnect from video room
       if (roomRef.current) {
         roomRef.current.disconnect();
       }
@@ -274,14 +283,28 @@ const InterviewRoom = () => {
         localTrackRef.current.audio.stop();
       }
 
-      await api.post(`/interview-status/${interviewId}`, {
-        status: 'completed'
-      });
+      // Stop any ongoing speech
+      stopSpeaking();
 
-      navigate('/dashboard');
+      // Complete the interview and generate report
+      const response = await api.post(`/interview/${interviewId}/complete`);
+      
+      console.log('Interview completed:', response.data);
+      
+      // Show success message
+      if (response.data.email_sent) {
+        alert('Interview completed successfully! Report has been sent via email.');
+      } else {
+        alert('Interview completed successfully! Report generated but email sending failed.');
+      }
+
+      // Clear authentication and redirect to login
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      navigate('/login');
     } catch (err) {
       console.error('Error ending interview:', err);
-      setError('Failed to end interview properly. Please try again.');
+      setError('Failed to complete interview properly. Please try again.');
     }
   };
 
@@ -394,8 +417,12 @@ const InterviewRoom = () => {
       setHasMoreQuestions(response.data.has_more_questions);
 
       if (!response.data.has_more_questions) {
+        setHasMoreQuestions(false);
         stopSpeaking();
-        handleEndInterview();
+        // Auto-complete interview after a short delay
+        setTimeout(() => {
+          handleEndInterview();
+        }, 2000);
         return;
       }
 
