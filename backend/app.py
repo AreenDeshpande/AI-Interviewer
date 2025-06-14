@@ -24,8 +24,7 @@ import threading
 import time
 import boto3
 import tempfile
-import speech_recognition as sr
-import pydub
+import whisper
 from pydub import AudioSegment
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -207,58 +206,52 @@ def get_next_question(interview_id, current_question_index):
         return None
 
 def transcribe_audio(audio_file_path):
-    """Transcribe audio file to text using speech recognition."""
+    """Transcribe audio file to text using OpenAI Whisper."""
     try:
-        # Initialize recognizer with adjusted settings
-        r = sr.Recognizer()
-        r.energy_threshold = 300
-        r.dynamic_energy_threshold = True
-        r.pause_threshold = 0.8
-        r.operation_timeout = None
-        r.phrase_threshold = 0.3
-        r.non_speaking_duration = 0.8
+        print(f"Starting Whisper transcription for: {audio_file_path}")
         
-        # Convert audio to wav format if needed
+        # Load Whisper model (using base model for balance of speed and accuracy)
+        model = whisper.load_model("base")
+        
+        # Convert audio to wav format if needed for better compatibility
         audio = AudioSegment.from_file(audio_file_path)
         
-        # Normalize audio levels
+        # Normalize audio levels and ensure proper format
         audio = audio.normalize()
-        
-        # Ensure proper format for speech recognition
         audio = audio.set_frame_rate(16000).set_channels(1)
         
         wav_path = audio_file_path.replace('.mp3', '.wav').replace('.m4a', '.wav').replace('.webm', '.wav')
         audio.export(wav_path, format="wav")
         
-        # Transcribe audio with multiple attempts
-        with sr.AudioFile(wav_path) as source:
-            # Adjust for ambient noise
-            r.adjust_for_ambient_noise(source, duration=0.5)
-            audio_data = r.record(source)
-            
-            # Try Google Speech Recognition first
-            try:
-                text = r.recognize_google(audio_data, language='en-US')
-                print(f"Google Speech Recognition result: {text}")
-                return text
-            except sr.UnknownValueError:
-                print("Google Speech Recognition could not understand audio")
-                return "Could not understand audio - please speak more clearly"
-            except sr.RequestError as e:
-                print(f"Could not request results from Google Speech Recognition service; {e}")
-                # Fallback to basic text if service is unavailable
-                return "Audio was recorded but transcription service is unavailable"
-            
+        print(f"Audio converted to WAV format: {wav_path}")
+        
+        # Transcribe using Whisper
+        result = model.transcribe(wav_path, language='en')
+        transcription = result["text"].strip()
+        
+        print(f"=== WHISPER TRANSCRIPTION RESULT ===")
+        print(f"Original audio file: {audio_file_path}")
+        print(f"Transcribed text: '{transcription}'")
+        print(f"Confidence: {result.get('confidence', 'N/A')}")
+        print(f"=====================================")
+        
+        if not transcription:
+            transcription = "No speech detected in audio recording"
+            print("Warning: Empty transcription result")
+        
+        return transcription
+        
     except Exception as e:
-        print(f"Error transcribing audio: {str(e)}")
+        print(f"Error transcribing audio with Whisper: {str(e)}")
         import traceback
         print(traceback.format_exc())
-        return f"Error during transcription: {str(e)}"
+        return f"Error during Whisper transcription: {str(e)}"
     finally:
         # Clean up temporary wav file
         try:
             if 'wav_path' in locals() and wav_path != audio_file_path and os.path.exists(wav_path):
                 os.remove(wav_path)
+                print(f"Cleaned up temporary file: {wav_path}")
         except Exception as cleanup_error:
             print(f"Error cleaning up temp file: {cleanup_error}")
 
@@ -996,7 +989,13 @@ def record_response(interview_id):
             'audio_processed': True
         }
         
-        print(f"Storing response data: {response_data}")
+        print(f"=== STORING RESPONSE DATA ===")
+        print(f"Interview ID: {interview_id}")
+        print(f"Question Index: {question_index}")
+        print(f"Question: {response_data['question']}")
+        print(f"Transcription: '{transcription}'")
+        print(f"Audio Size: {len(audio_data)} bytes")
+        print("============================")
         
         # Update interview with response
         result = db.interviews.update_one(
@@ -1006,11 +1005,17 @@ def record_response(interview_id):
         
         print(f"Database update result: modified_count={result.modified_count}")
         
+        # Verify the data was stored
+        updated_interview = db.interviews.find_one({'interview_id': interview_id})
+        responses_count = len(updated_interview.get('responses', []))
+        print(f"Total responses now stored: {responses_count}")
+        
         return jsonify({
             'message': 'Response recorded and transcribed successfully',
             'transcription': transcription,
             'question_index': question_index,
-            'audio_size': len(audio_data)
+            'audio_size': len(audio_data),
+            'total_responses': responses_count
         })
         
     except Exception as e:
@@ -1023,18 +1028,45 @@ def record_response(interview_id):
 def complete_interview(interview_id):
     """Complete interview and generate report."""
     try:
+        print(f"=== COMPLETING INTERVIEW {interview_id} ===")
+        
         # Find interview by interview_id
         interview = db.interviews.find_one({'interview_id': interview_id})
         if not interview:
+            print(f"Interview not found: {interview_id}")
             return jsonify({'message': 'Interview not found'}), 404
+        
+        # Check if interview is already completed to prevent duplicate emails
+        if interview.get('status') == 'completed' and interview.get('report_sent'):
+            print(f"Interview {interview_id} already completed and report sent")
+            return jsonify({
+                'message': 'Interview already completed',
+                'report_generated': True,
+                'email_sent': True,
+                'candidate_name': interview.get('candidate_name', 'Candidate')
+            })
         
         # Get user details
         user = db.users.find_one({'_id': interview['user_id']})
         candidate_name = user.get('name', 'Candidate') if user else 'Candidate'
         candidate_email = user.get('email', 'unknown@email.com') if user else 'unknown@email.com'
         
+        print(f"Processing completion for candidate: {candidate_name} ({candidate_email})")
+        
         # Check if interview has responses, if not create a basic structure
         responses = interview.get('responses', [])
+        print(f"Found {len(responses)} responses")
+        
+        # Print all responses for verification
+        print("=== CANDIDATE RESPONSES ===")
+        for i, response in enumerate(responses):
+            print(f"Response {i+1}:")
+            print(f"  Question Index: {response.get('question_index', 'N/A')}")
+            print(f"  Question: {response.get('question', 'N/A')}")
+            print(f"  Transcription: '{response.get('transcription', 'No response')}'")
+            print(f"  Timestamp: {response.get('timestamp', 'N/A')}")
+            print("---")
+        
         if not responses:
             # Create dummy responses if none exist
             questions = interview.get('questions', [])
@@ -1053,9 +1085,16 @@ def complete_interview(interview_id):
                 {'$set': {'responses': responses}}
             )
             interview['responses'] = responses
+            print("Created dummy responses for empty interview")
         
         # Generate report
+        print("Generating interview report...")
         report_content = generate_interview_report(interview)
+        
+        print("=== GENERATED REPORT PREVIEW ===")
+        print(report_content[:500] + "..." if len(report_content) > 500 else report_content)
+        print("===============================")
+        
         if not report_content:
             # Create a basic report if AI generation fails
             report_content = f"""
@@ -1080,14 +1119,21 @@ Manual review recommended for final assessment.
 
 SCORE: Pending manual review
 """
+            print("Using fallback report due to AI generation failure")
         
         # Create PDF report
+        print("Creating PDF report...")
         pdf_buffer = create_pdf_report(report_content, candidate_name)
         
-        # Send email with report
+        # Send email with report (only if not already sent)
         email_sent = False
-        if pdf_buffer:
+        if pdf_buffer and not interview.get('report_sent'):
+            print("Sending email with report...")
             email_sent = send_report_email(pdf_buffer, candidate_name)
+            print(f"Email sent: {email_sent}")
+        else:
+            print("Skipping email (already sent or PDF creation failed)")
+            email_sent = interview.get('report_sent', False)
         
         # Update interview status
         db.interviews.update_one(
@@ -1097,9 +1143,12 @@ SCORE: Pending manual review
                 'completed_at': datetime.now(timezone.utc),
                 'report_generated': True,
                 'report_sent': email_sent,
-                'report_content': report_content
+                'report_content': report_content,
+                'candidate_name': candidate_name
             }}
         )
+        
+        print(f"Interview {interview_id} completion processed successfully")
         
         return jsonify({
             'message': 'Interview completed successfully',
