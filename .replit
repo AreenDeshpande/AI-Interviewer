@@ -5,6 +5,7 @@ channel = "stable-24_05"
 packages = ["ffmpeg-full", "freetype", "glibcLocales"]
 
 [workflows]
+runButton = "Start Full Application"
 
 [[workflows.workflow]]
 name = "Start Backend"
@@ -35,3 +36,16 @@ args = "npm install"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run dev"
+
+[[workflows.workflow]]
+name = "Start Full Application"
+author = 43831015
+mode = "parallel"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && python app.py"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd frontend && npm install && npm run dev"
