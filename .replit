@@ -3,3 +3,35 @@ modules = ["nodejs-20", "python-3.12", "web"]
 [nix]
 channel = "stable-24_05"
 packages = ["ffmpeg-full", "freetype", "glibcLocales"]
+
+[workflows]
+
+[[workflows.workflow]]
+name = "Start Backend"
+author = 43831015
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python app.py"
+
+[[workflows.workflow]]
+name = "Start Frontend"
+author = 43831015
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd frontend"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm install"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
