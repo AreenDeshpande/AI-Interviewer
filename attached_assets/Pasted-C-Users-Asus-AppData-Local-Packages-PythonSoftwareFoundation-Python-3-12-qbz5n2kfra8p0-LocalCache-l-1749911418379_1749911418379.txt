@@ -1,0 +1,31 @@
+C:\Users\Asus\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\pydub\utils.py:198: RuntimeWarning: Couldn't find ffprobe or avprobe - defaulting to ffprobe, but may not work
+  warn("Couldn't find ffprobe or avprobe - defaulting to ffprobe, but may not work", RuntimeWarning)
+Error transcribing audio with Whisper: [WinError 2] The system cannot find the file specified
+Traceback (most recent call last):
+  File "c:\Users\Asus\Desktop\ai-interviewer\backend\app.py", line 217, in transcribe_audio
+    audio = AudioSegment.from_file(audio_file_path)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\pydub\audio_segment.py", line 728, in from_file
+    info = mediainfo_json(orig_file, read_ahead_limit=read_ahead_limit)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Asus\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\pydub\utils.py", line 274, in mediainfo_json
+    res = Popen(command, stdin=stdin_parameter, stdout=PIPE, stderr=PIPE)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\Lib\subprocess.py", line 1538, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+
+Transcription result: Error during Whisper transcription: [WinError 2] The system cannot find the file specified
+Temporary audio file cleaned up
+=== STORING RESPONSE DATA ===
+Interview ID: 7a29f4f2-c958-41ef-a297-8bd2938468e8
+Question Index: 1
+Question: What programming languages are you most comfortable with, and why?
+Transcription: 'Error during Whisper transcription: [WinError 2] The system cannot find the file specified'
+Audio Size: 71114 bytes
+============================
+Database update result: modified_count=1   
+Total responses now stored: 1
