@@ -24,6 +24,18 @@ import threading
 import time
 import boto3
 import tempfile
+import speech_recognition as sr
+import pydub
+from pydub import AudioSegment
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_JUSTIFY
+import io
 
 
 # Load environment variables
@@ -193,6 +205,165 @@ def get_next_question(interview_id, current_question_index):
     except Exception as e:
         print(f"Error getting next question: {str(e)}")
         return None
+
+def transcribe_audio(audio_file_path):
+    """Transcribe audio file to text using speech recognition."""
+    try:
+        # Initialize recognizer
+        r = sr.Recognizer()
+        
+        # Convert audio to wav format if needed
+        audio = AudioSegment.from_file(audio_file_path)
+        wav_path = audio_file_path.replace('.mp3', '.wav').replace('.m4a', '.wav')
+        audio.export(wav_path, format="wav")
+        
+        # Transcribe audio
+        with sr.AudioFile(wav_path) as source:
+            audio_data = r.record(source)
+            text = r.recognize_google(audio_data)
+            
+        # Clean up temporary wav file
+        if wav_path != audio_file_path:
+            os.remove(wav_path)
+            
+        return text
+    except Exception as e:
+        print(f"Error transcribing audio: {str(e)}")
+        return None
+
+def generate_interview_report(interview_data):
+    """Generate interview report using OpenAI."""
+    try:
+        # Prepare interview data for analysis
+        qa_pairs = []
+        for i, response in enumerate(interview_data.get('responses', [])):
+            question = interview_data['questions'][i] if i < len(interview_data['questions']) else f"Question {i+1}"
+            answer = response.get('transcription', 'No response recorded')
+            qa_pairs.append(f"Q: {question}\nA: {answer}")
+        
+        interview_text = "\n\n".join(qa_pairs)
+        
+        # Generate report using OpenAI
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": """You are an expert interview assessor. Analyze the interview responses and provide a comprehensive evaluation report. 
+
+Structure your response as follows:
+1. CANDIDATE OVERVIEW
+2. STRENGTHS (list key strengths with examples)
+3. AREAS FOR IMPROVEMENT (list weaknesses with specific feedback)
+4. TECHNICAL SKILLS ASSESSMENT
+5. COMMUNICATION SKILLS
+6. OVERALL RECOMMENDATION (Recommend/Consider/Not Recommend)
+7. SCORE (out of 10)
+
+Be professional, constructive, and specific in your feedback."""},
+                {"role": "user", "content": f"Please analyze this interview and provide a detailed assessment report:\n\n{interview_text}"}
+            ],
+            temperature=0.3,
+            max_tokens=1500
+        )
+        
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Error generating report: {str(e)}")
+        return None
+
+def create_pdf_report(report_content, candidate_name="Candidate"):
+    """Create PDF report from text content."""
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            spaceAfter=30,
+        )
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=14,
+            spaceAfter=12,
+        )
+        
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['Normal'],
+            fontSize=12,
+            spaceAfter=12,
+            alignment=TA_JUSTIFY,
+        )
+        
+        # Build PDF content
+        story = []
+        story.append(Paragraph(f"Interview Assessment Report - {candidate_name}", title_style))
+        story.append(Spacer(1, 20))
+        
+        # Split report into sections and format
+        sections = report_content.split('\n')
+        for section in sections:
+            if section.strip():
+                if section.strip().isupper() and len(section.strip()) < 50:
+                    story.append(Paragraph(section.strip(), heading_style))
+                else:
+                    story.append(Paragraph(section.strip(), body_style))
+        
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        print(f"Error creating PDF: {str(e)}")
+        return None
+
+def send_report_email(report_pdf, candidate_name="Candidate", recipient_email="areendeshpande@gmail.com"):
+    """Send interview report via email."""
+    try:
+        msg = MIMEMultipart()
+        msg['Subject'] = f"Interview Assessment Report - {candidate_name}"
+        msg['From'] = 'areendeshpande@gmail.com'
+        msg['To'] = recipient_email
+        
+        # Email body
+        body = f"""
+        Dear Hiring Manager,
+        
+        Please find attached the comprehensive interview assessment report for {candidate_name}.
+        
+        The report includes:
+        - Candidate overview
+        - Strengths and areas for improvement
+        - Technical and communication skills assessment
+        - Overall recommendation and scoring
+        
+        This report was generated automatically by AssessAI based on the candidate's interview responses.
+        
+        Best regards,
+        AssessAI System
+        """
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Attach PDF report
+        if report_pdf:
+            part = MIMEApplication(report_pdf.getvalue(), Name=f"{candidate_name}_Interview_Report.pdf")
+            part['Content-Disposition'] = f'attachment; filename="{candidate_name}_Interview_Report.pdf"'
+            msg.attach(part)
+        
+        # Send email
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login('areendeshpande@gmail.com', os.getenv("GMAIL_PASS"))
+            smtp.send_message(msg)
+            print(f"Report sent successfully to {recipient_email}")
+            return True
+    except Exception as e:
+        print(f"Error sending email: {str(e)}")
+        return False
 
 def generate_twilio_token(identity, room_name):
     """Generate Twilio Access Token for video room."""
@@ -681,6 +852,111 @@ def get_token(interview_id):
         
     except Exception as e:
         print(f"Error generating token: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
+@app.route('/interview/<interview_id>/record-response', methods=['POST'])
+def record_response(interview_id):
+    """Record and transcribe candidate response."""
+    try:
+        # Find interview by interview_id
+        interview = db.interviews.find_one({'interview_id': interview_id})
+        if not interview:
+            return jsonify({'message': 'Interview not found'}), 404
+        
+        data = request.get_json()
+        question_index = data.get('question_index', 0)
+        audio_blob = data.get('audio_blob')  # Base64 encoded audio data
+        
+        if not audio_blob:
+            return jsonify({'message': 'No audio data provided'}), 400
+        
+        # Save audio file temporarily
+        import base64
+        audio_data = base64.b64decode(audio_blob.split(',')[1])  # Remove data:audio/wav;base64, prefix
+        temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.wav")
+        
+        with open(temp_audio_path, 'wb') as f:
+            f.write(audio_data)
+        
+        # Transcribe audio
+        transcription = transcribe_audio(temp_audio_path)
+        
+        # Clean up temporary file
+        os.remove(temp_audio_path)
+        
+        if not transcription:
+            return jsonify({'message': 'Failed to transcribe audio'}), 500
+        
+        # Store transcription in database
+        response_data = {
+            'question_index': question_index,
+            'question': interview['questions'][question_index],
+            'transcription': transcription,
+            'timestamp': datetime.now(timezone.utc)
+        }
+        
+        # Update interview with response
+        db.interviews.update_one(
+            {'interview_id': interview_id},
+            {'$push': {'responses': response_data}}
+        )
+        
+        return jsonify({
+            'message': 'Response recorded and transcribed successfully',
+            'transcription': transcription
+        })
+        
+    except Exception as e:
+        print(f"Error recording response: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
+@app.route('/interview/<interview_id>/complete', methods=['POST'])
+def complete_interview(interview_id):
+    """Complete interview and generate report."""
+    try:
+        # Find interview by interview_id
+        interview = db.interviews.find_one({'interview_id': interview_id})
+        if not interview:
+            return jsonify({'message': 'Interview not found'}), 404
+        
+        # Get user details
+        user = db.users.find_one({'_id': interview['user_id']})
+        candidate_name = user.get('name', 'Candidate') if user else 'Candidate'
+        
+        # Generate report
+        report_content = generate_interview_report(interview)
+        if not report_content:
+            return jsonify({'message': 'Failed to generate report'}), 500
+        
+        # Create PDF report
+        pdf_buffer = create_pdf_report(report_content, candidate_name)
+        if not pdf_buffer:
+            return jsonify({'message': 'Failed to create PDF report'}), 500
+        
+        # Send email with report
+        email_sent = send_report_email(pdf_buffer, candidate_name)
+        
+        # Update interview status
+        db.interviews.update_one(
+            {'interview_id': interview_id},
+            {'$set': {
+                'status': 'completed',
+                'completed_at': datetime.now(timezone.utc),
+                'report_generated': True,
+                'report_sent': email_sent,
+                'report_content': report_content
+            }}
+        )
+        
+        return jsonify({
+            'message': 'Interview completed successfully',
+            'report_generated': True,
+            'email_sent': email_sent,
+            'report_preview': report_content[:500] + '...' if len(report_content) > 500 else report_content
+        })
+        
+    except Exception as e:
+        print(f"Error completing interview: {str(e)}")
         return jsonify({'message': f'Error: {str(e)}'}), 500
 
 @app.route('/interview/<interview_id>/next-question', methods=['POST'])

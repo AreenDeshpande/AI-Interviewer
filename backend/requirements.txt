@@ -1,4 +1,9 @@
-twilio==8.10.0
-phonenumbers==8.13.25
-python-dotenv==1.0.0
-Jinja2==3.1.2
+PyPDF2
+twilio
+python-dotenv
+bcrypt
+PyJWT
+SpeechRecognition
+pydub
+reportlab
+google-api-python-client

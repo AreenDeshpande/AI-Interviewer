@@ -20,6 +20,7 @@ import {
   SkipNext as SkipNextIcon,
   VolumeUp as VolumeUpIcon,
   VolumeOff as VolumeOffIcon,
+  Stop as StopIcon
 } from '@mui/icons-material';
 import * as Twilio from 'twilio-video';
 import api from '../config/axios';
@@ -47,6 +48,11 @@ const InterviewRoom = () => {
   const [selectedVoice, setSelectedVoice] = useState(null);
   const speechSynthesisRef = useRef(window.speechSynthesis);
   const utteranceRef = useRef(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [recordedChunks, setRecordedChunks] = useState([]);
+  const recordingTimeoutRef = useRef(null);
+
 
   useEffect(() => {
     const initializeInterview = async () => {
@@ -54,14 +60,14 @@ const InterviewRoom = () => {
         // Get interview room data
         const response = await api.get(`/interview/${interviewId}`);
         setInterviewData(response.data);
-        
+
         // Initialize Twilio video
         const { token, room_name, questions } = response.data;
         await connectToRoom(token, room_name);
-        
+
         // Start polling for interview status
         startStatusPolling();
-        
+
         setLoading(false);
       } catch (err) {
         setError('Failed to initialize interview room. Please try again.');
@@ -83,6 +89,12 @@ const InterviewRoom = () => {
       if (statusPollIntervalRef.current) {
         clearInterval(statusPollIntervalRef.current);
       }
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+      if (recordingTimeoutRef.current) {
+        clearTimeout(recordingTimeoutRef.current);
+      }
     };
   }, [interviewId]);
 
@@ -90,7 +102,7 @@ const InterviewRoom = () => {
     const loadVoices = () => {
       const availableVoices = speechSynthesisRef.current.getVoices();
       setVoices(availableVoices);
-      
+
       // Try to find a good female voice
       const preferredVoices = [
         'Microsoft Zira Desktop',
@@ -99,23 +111,23 @@ const InterviewRoom = () => {
         'Google UK English Female',
         'Google US English Female'
       ];
-      
+
       const voice = availableVoices.find(v => 
         preferredVoices.includes(v.name)
       ) || availableVoices[0];
-      
+
       if (voice) {
         setSelectedVoice(voice);
       }
     };
-    
+
     // Chrome loads voices asynchronously
     if (speechSynthesisRef.current.getVoices().length > 0) {
       loadVoices();
     }
-    
+
     speechSynthesisRef.current.onvoiceschanged = loadVoices;
-    
+
     return () => {
       speechSynthesisRef.current.onvoiceschanged = null;
       stopSpeaking();
@@ -126,7 +138,7 @@ const InterviewRoom = () => {
     try {
       // Create local audio and video tracks with fallbacks
       let localTracks = [];
-      
+
       try {
         // Try to get camera and mic tracks, but don't fail if we can't
         const videoTrack = await Twilio.createLocalVideoTrack({
@@ -224,28 +236,28 @@ const InterviewRoom = () => {
       try {
         const response = await api.get(`/interview-status/${interviewId}`);
         const { status, current_question_index, questions } = response.data;
-        
+
         if (status === 'completed') {
           clearInterval(statusPollIntervalRef.current);
           stopSpeaking();
           handleEndInterview();
           return;
         }
-        
+
         if (current_question_index !== undefined && questions) {
           const newQuestionIndex = current_question_index;
           if (newQuestionIndex !== questionIndex) {
             setQuestionIndex(newQuestionIndex);
             const question = questions[newQuestionIndex];
             setCurrentQuestion(question);
-            
+
             // Only speak if we're not already speaking
             if (!isSpeaking) {
               speakText(question);
             }
           }
         }
-        
+
       } catch (err) {
         console.error('Error polling interview status:', err);
       }
@@ -261,11 +273,11 @@ const InterviewRoom = () => {
         localTrackRef.current.video.stop();
         localTrackRef.current.audio.stop();
       }
-      
+
       await api.post(`/interview-status/${interviewId}`, {
         status: 'completed'
       });
-      
+
       navigate('/dashboard');
     } catch (err) {
       console.error('Error ending interview:', err);
@@ -297,23 +309,96 @@ const InterviewRoom = () => {
     }
   };
 
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: 'audio/wav' });
+        await uploadRecording(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      setMediaRecorder(recorder);
+      setRecordedChunks(chunks);
+      recorder.start();
+      setIsRecording(true);
+
+      // Auto-stop recording after 2 minutes
+      recordingTimeoutRef.current = setTimeout(() => {
+        if (recorder.state === 'recording') {
+          stopRecording();
+        }
+      }, 120000);
+
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      alert('Could not start recording. Please check microphone permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      setIsRecording(false);
+      if (recordingTimeoutRef.current) {
+        clearTimeout(recordingTimeoutRef.current);
+      }
+    }
+  };
+
+  const uploadRecording = async (audioBlob) => {
+    try {
+      // Convert blob to base64
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Audio = reader.result;
+
+        const response = await api.post(
+          `/interview/${interviewId}/record-response`,
+          {
+            question_index: questionIndex,
+            audio_blob: base64Audio
+          }
+        );
+
+        console.log('Recording uploaded and transcribed:', response.data);
+
+        // Move to next question after successful recording
+        handleNextQuestion();
+      };
+      reader.readAsDataURL(audioBlob);
+    } catch (error) {
+      console.error('Error uploading recording:', error);
+      alert('Failed to upload recording. Please try again.');
+    }
+  };
+
   const handleNextQuestion = async () => {
     if (isSpeaking) {
       stopSpeaking();
       return;
     }
-    
+
     try {
       setIsNextQuestionLoading(true);
       const response = await api.post(`/interview/${interviewId}/next-question`);
       setHasMoreQuestions(response.data.has_more_questions);
-      
+
       if (!response.data.has_more_questions) {
         stopSpeaking();
         handleEndInterview();
         return;
       }
-      
+
       // Speak the new question
       if (response.data.question) {
         // Small delay to ensure UI updates
@@ -321,7 +406,7 @@ const InterviewRoom = () => {
           speakText(response.data.question);
         }, 100);
       }
-      
+
     } catch (err) {
       console.error('Error moving to next question:', err);
       setError('Failed to move to next question. Please try again.');
@@ -332,45 +417,45 @@ const InterviewRoom = () => {
 
   const speakText = (text) => {
     if (!text || !selectedVoice) return;
-    
+
     try {
       // Cancel any ongoing speech
       stopSpeaking();
-      
+
       // Create a new utterance
       const utterance = new SpeechSynthesisUtterance(text);
       utteranceRef.current = utterance;
-      
+
       // Configure voice settings
       utterance.voice = selectedVoice;
       utterance.rate = 0.9;  // Slightly slower for better clarity
       utterance.pitch = 1.0;
       utterance.volume = 1.0;
-      
+
       // Handle speech events
       utterance.onstart = () => {
         setIsSpeaking(true);
         setBotStatus('Speaking...');
       };
-      
+
       utterance.onend = () => {
         setIsSpeaking(false);
         setBotStatus('Ready');
         utteranceRef.current = null;
       };
-      
+
       utterance.onerror = (event) => {
         console.error('Speech synthesis error:', event);
         setIsSpeaking(false);
         setBotStatus('Error speaking');
         utteranceRef.current = null;
-        
+
         // Try to recover from error
         if (event.error === 'interrupted' || event.error === 'canceled') {
           // These are expected errors when stopping speech
           return;
         }
-        
+
         // For other errors, try to speak again after a short delay
         setTimeout(() => {
           if (text === currentQuestion) {
@@ -378,17 +463,17 @@ const InterviewRoom = () => {
           }
         }, 1000);
       };
-      
+
       // Speak the text
       speechSynthesisRef.current.speak(utterance);
-      
+
     } catch (err) {
       console.error('Error in speakText:', err);
       setIsSpeaking(false);
       setBotStatus('Error speaking');
     }
   };
-  
+
   const stopSpeaking = () => {
     try {
       if (utteranceRef.current) {
@@ -467,7 +552,7 @@ const InterviewRoom = () => {
             </Typography>
           </Box>
         )}
-        
+
         {/* Video controls overlay */}
         <Box sx={{ 
           position: 'absolute', 
@@ -499,6 +584,46 @@ const InterviewRoom = () => {
         </Box>
       </Paper>
 
+      {/* Recording Controls */}
+      {isConnected && currentQuestion && (
+        <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
+          <Typography variant="h6" gutterBottom>
+            Response Recording
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Click "Start Recording" to record your response to the current question.
+          </Typography>
+          <Box display="flex" gap={2} alignItems="center">
+            {!isRecording ? (
+              <Button
+                variant="contained"
+                color="error"
+                onClick={startRecording}
+                startIcon={<MicIcon />}
+                disabled={isNextQuestionLoading}
+              >
+                Start Recording
+              </Button>
+            ) : (
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={stopRecording}
+                startIcon={<StopIcon />}
+              >
+                Stop Recording
+              </Button>
+            )}
+            {isRecording && (
+              <Typography variant="body2" color="error">
+                Recording... (Click Stop when finished)
+              </Typography>
+            )}
+          </Box>
+        </Paper>
+      )}
+
+
       {/* Controls */}
       <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2 }}>
         <Button
@@ -512,7 +637,7 @@ const InterviewRoom = () => {
         >
           {isSpeaking ? "Stop" : isNextQuestionLoading ? "Loading..." : "Next Question"}
         </Button>
-        
+
         <Button
           variant="contained"
           color="error"
@@ -527,4 +652,4 @@ const InterviewRoom = () => {
   );
 };
 
-export default InterviewRoom; 
+export default InterviewRoom;
