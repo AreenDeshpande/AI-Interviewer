@@ -518,10 +518,13 @@ const InterviewRoom = () => {
     }
   };
 
+  // Update the speakText function to use the correct voice
   const speakText = (text) => {
     if (!text || !selectedVoice) return;
 
     try {
+      console.log("Speaking text:", text);
+      
       // Cancel any ongoing speech
       stopSpeaking();
 
@@ -537,11 +540,13 @@ const InterviewRoom = () => {
 
       // Handle speech events
       utterance.onstart = () => {
+        console.log("Speech started");
         setIsSpeaking(true);
         setBotStatus('Speaking...');
       };
 
       utterance.onend = () => {
+        console.log("Speech ended");
         setIsSpeaking(false);
         setBotStatus('Ready');
         utteranceRef.current = null;
@@ -552,30 +557,24 @@ const InterviewRoom = () => {
         setIsSpeaking(false);
         setBotStatus('Error speaking');
         utteranceRef.current = null;
-
-        // Try to recover from error
-        if (event.error === 'interrupted' || event.error === 'canceled') {
-          // These are expected errors when stopping speech
-          return;
-        }
-
-        // For other errors, try to speak again after a short delay
-        setTimeout(() => {
-          if (text === currentQuestion) {
-            speakText(text);
-          }
-        }, 1000);
       };
 
       // Speak the text
       speechSynthesisRef.current.speak(utterance);
-
     } catch (err) {
       console.error('Error in speakText:', err);
       setIsSpeaking(false);
       setBotStatus('Error speaking');
     }
   };
+
+  // Make sure questions are automatically spoken when they change
+  useEffect(() => {
+    if (currentQuestion && !isSpeaking) {
+      console.log("Auto-speaking question:", currentQuestion);
+      speakText(currentQuestion);
+    }
+  }, [currentQuestion, selectedVoice]);
 
   const stopSpeaking = () => {
     try {
