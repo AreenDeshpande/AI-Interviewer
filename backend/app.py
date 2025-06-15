@@ -210,29 +210,62 @@ def transcribe_audio(audio_file_path):
     try:
         print(f"Starting Whisper transcription for: {audio_file_path}")
         
-        # Load Whisper model (using base model for balance of speed and accuracy)
+        # Verify file exists before processing
+        if not os.path.exists(audio_file_path):
+            print(f"ERROR: Audio file does not exist: {audio_file_path}")
+            return f"Error: Audio file not found at {audio_file_path}"
+            
+        # Get absolute path to ensure no path resolution issues
+        audio_file_path = os.path.abspath(audio_file_path)
+        print(f"Using absolute path: {audio_file_path}")
+        
+        # File size verification
+        file_size = os.path.getsize(audio_file_path)
+        print(f"Audio file size: {file_size} bytes")
+        if file_size == 0:
+            return "Error: Audio file is empty (0 bytes)"
+        
+        # Convert audio to wav format using FFmpeg directly
+        wav_path = os.path.join(os.path.dirname(audio_file_path), 
+                              f"whisper_temp_{uuid.uuid4().hex}.wav")
+        
+        print(f"Converting audio to WAV format at: {wav_path}")
+        
+        # Use FFmpeg to convert the audio with explicit path
+        ffmpeg_path = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+        ffmpeg_cmd = [
+            ffmpeg_path,
+            "-i", audio_file_path,
+            "-ar", "16000",  # Sample rate
+            "-ac", "1",      # Mono channel
+            "-y",            # Overwrite if exists
+            wav_path
+        ]
+        
+        print(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}")
+        import subprocess
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        
+        # Verify the WAV file was created
+        if not os.path.exists(wav_path):
+            print(f"ERROR: FFmpeg failed to create WAV file at {wav_path}")
+            return "Error: Failed to convert audio format"
+            
+        print(f"WAV file created successfully: {wav_path}")
+        print(f"WAV file size: {os.path.getsize(wav_path)} bytes")
+        
+        # Load Whisper model
+        print("Loading Whisper model...")
         model = whisper.load_model("base")
         
-        # Convert audio to wav format if needed for better compatibility
-        audio = AudioSegment.from_file(audio_file_path)
-        
-        # Normalize audio levels and ensure proper format
-        audio = audio.normalize()
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        
-        wav_path = audio_file_path.replace('.mp3', '.wav').replace('.m4a', '.wav').replace('.webm', '.wav')
-        audio.export(wav_path, format="wav")
-        
-        print(f"Audio converted to WAV format: {wav_path}")
-        
         # Transcribe using Whisper
-        result = model.transcribe(wav_path, language='en')
+        print(f"Transcribing audio...")
+        result = model.transcribe(wav_path)
         transcription = result["text"].strip()
         
         print(f"=== WHISPER TRANSCRIPTION RESULT ===")
         print(f"Original audio file: {audio_file_path}")
         print(f"Transcribed text: '{transcription}'")
-        print(f"Confidence: {result.get('confidence', 'N/A')}")
         print(f"=====================================")
         
         if not transcription:
@@ -241,15 +274,24 @@ def transcribe_audio(audio_file_path):
         
         return transcription
         
+    except FileNotFoundError as e:
+        error_msg = f"Audio file not found error: {str(e)}"
+        print(error_msg)
+        return f"Error during Whisper transcription: {error_msg}"
+    except subprocess.CalledProcessError as e:
+        error_msg = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
+        print(error_msg)
+        return f"Error during audio conversion: {error_msg}"
     except Exception as e:
-        print(f"Error transcribing audio with Whisper: {str(e)}")
+        error_msg = f"Error transcribing audio: {str(e)}"
+        print(error_msg)
         import traceback
         print(traceback.format_exc())
         return f"Error during Whisper transcription: {str(e)}"
     finally:
         # Clean up temporary wav file
         try:
-            if 'wav_path' in locals() and wav_path != audio_file_path and os.path.exists(wav_path):
+            if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
                 print(f"Cleaned up temporary file: {wav_path}")
         except Exception as cleanup_error:
@@ -382,12 +424,12 @@ def create_pdf_report(report_content, candidate_name="Candidate"):
         print(f"Error creating PDF: {str(e)}")
         return None
 
-def send_report_email(report_pdf, candidate_name="Candidate", recipient_email="areendeshpande@gmail.com"):
+def send_report_email(report_pdf, candidate_name="Candidate", recipient_email="piyushkrishna11@gmail.com"):
     """Send interview report via email."""
     try:
         msg = MIMEMultipart()
         msg['Subject'] = f"Interview Assessment Report - {candidate_name}"
-        msg['From'] = 'areendeshpande@gmail.com'
+        msg['From'] = 'piyushkrishna11@gmail.com'
         msg['To'] = recipient_email
         
         # Email body
@@ -418,7 +460,7 @@ def send_report_email(report_pdf, candidate_name="Candidate", recipient_email="a
         
         # Send email
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login('areendeshpande@gmail.com', os.getenv("GMAIL_PASS"))
+            smtp.login('piyushkrishna11@gmail.com', os.getenv("GMAIL_PASS"))
             smtp.send_message(msg)
             print(f"Report sent successfully to {recipient_email}")
             return True
@@ -918,6 +960,7 @@ def get_token(interview_id):
 @app.route('/interview/<interview_id>/record-response', methods=['POST'])
 def record_response(interview_id):
     """Record and transcribe candidate response."""
+    temp_audio_path = None
     try:
         # Find interview by interview_id
         interview = db.interviews.find_one({'interview_id': interview_id})
@@ -933,20 +976,27 @@ def record_response(interview_id):
         
         print(f"Processing audio for question {question_index} in interview {interview_id}")
         
+        # Create unique filename with timestamp to avoid overwriting
+        timestamp = int(time.time())
+        temp_filename = f"audio_{interview_id}_{question_index}_{timestamp}"
+        
         # Save audio file temporarily with proper extension
         import base64
         try:
             # Handle different audio formats
             if 'data:audio/webm' in audio_blob:
                 audio_data = base64.b64decode(audio_blob.split(',')[1])
-                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.webm")
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"{temp_filename}.webm")
             elif 'data:audio/wav' in audio_blob:
                 audio_data = base64.b64decode(audio_blob.split(',')[1])
-                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.wav")
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"{temp_filename}.wav")
             else:
                 # Default to webm
                 audio_data = base64.b64decode(audio_blob.split(',')[1])
-                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.webm")
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"{temp_filename}.webm")
+            
+            # Ensure the upload folder exists
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
             
             print(f"Saving audio to: {temp_audio_path}")
             print(f"Audio data size: {len(audio_data)} bytes")
@@ -955,10 +1005,15 @@ def record_response(interview_id):
                 f.write(audio_data)
             
             # Verify file was written
-            if not os.path.exists(temp_audio_path) or os.path.getsize(temp_audio_path) == 0:
-                return jsonify({'message': 'Failed to save audio file'}), 500
+            if not os.path.exists(temp_audio_path):
+                return jsonify({'message': 'Failed to save audio file - file not found'}), 500
+                
+            if os.path.getsize(temp_audio_path) == 0:
+                return jsonify({'message': 'Failed to save audio file - file size is 0 bytes'}), 500
             
-            print(f"Audio file saved successfully, size: {os.path.getsize(temp_audio_path)} bytes")
+            print(f"Audio file saved successfully at {temp_audio_path}")
+            print(f"File size: {os.path.getsize(temp_audio_path)} bytes")
+            print(f"File exists check: {os.path.exists(temp_audio_path)}")
             
         except Exception as audio_error:
             print(f"Error saving audio: {audio_error}")
@@ -968,14 +1023,6 @@ def record_response(interview_id):
         print("Starting transcription...")
         transcription = transcribe_audio(temp_audio_path)
         print(f"Transcription result: {transcription}")
-        
-        # Clean up temporary file
-        try:
-            if os.path.exists(temp_audio_path):
-                os.remove(temp_audio_path)
-                print("Temporary audio file cleaned up")
-        except Exception as cleanup_error:
-            print(f"Error cleaning up audio file: {cleanup_error}")
         
         if not transcription:
             transcription = "No speech detected in audio recording"
@@ -1023,6 +1070,18 @@ def record_response(interview_id):
         import traceback
         print(traceback.format_exc())
         return jsonify({'message': f'Error: {str(e)}'}), 500
+    finally:
+        # Clean up temporary file ONLY after transcription is complete
+        try:
+            if temp_audio_path and os.path.exists(temp_audio_path):
+                # Keep the file for debugging if there was an error in the transcription
+                if "Error during Whisper transcription" not in str(transcription):
+                    os.remove(temp_audio_path)
+                    print(f"Cleaned up audio file: {temp_audio_path}")
+                else:
+                    print(f"Keeping audio file for debugging: {temp_audio_path}")
+        except Exception as cleanup_error:
+            print(f"Error cleaning up audio file: {cleanup_error}")
 
 @app.route('/interview/<interview_id>/complete', methods=['POST'])
 def complete_interview(interview_id):
@@ -1205,5 +1264,48 @@ def next_question(interview_id):
         print(f"Error moving to next question: {str(e)}")
         return jsonify({'message': f'Error: {str(e)}'}), 500
 
+# Set FFmpeg path
+FFMPEG_PATH = r"C:\Users\HP\Downloads\ffmpeg-2025-06-11-git-f019dd69f0-essentials_build\ffmpeg-2025-06-11-git-f019dd69f0-essentials_build\bin"
+os.environ["PATH"] = FFMPEG_PATH + os.pathsep + os.environ["PATH"]
+
+# Also set the paths directly for pydub
+AudioSegment.converter = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+AudioSegment.ffmpeg = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+AudioSegment.ffprobe = os.path.join(FFMPEG_PATH, "ffprobe.exe")
+
+print(f"FFmpeg path set to: {FFMPEG_PATH}")
+
+@app.route('/test-ffmpeg', methods=['GET'])
+def test_ffmpeg():
+    """Test if FFmpeg is properly configured."""
+    try:
+        # Check if ffmpeg exists
+        ffmpeg_path = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+        ffmpeg_exists = os.path.exists(ffmpeg_path)
+        
+        # Run ffmpeg -version command
+        import subprocess
+        result = subprocess.run(
+            [ffmpeg_path, "-version"], 
+            capture_output=True, 
+            text=True
+        )
+        
+        return jsonify({
+            'ffmpeg_exists': ffmpeg_exists,
+            'ffmpeg_path': ffmpeg_path,
+            'version_output': result.stdout,
+            'status': 'FFmpeg is properly configured' if result.returncode == 0 else 'FFmpeg test failed',
+            'return_code': result.returncode
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'status': 'FFmpeg test failed'
+        }), 500
+
 if __name__ == '__main__':
     app.run(debug=True)
+
