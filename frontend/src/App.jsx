@@ -19,6 +19,7 @@ import LandingPage from './pages/LandingPage.jsx';
 import ResumeUploadPage from './pages/ResumeUploadPage.jsx';
 import InterviewInstructionsPage from './pages/InterviewInstructionsPage.jsx';
 import InterviewRoom from './pages/InterviewRoom.jsx';
+import InterviewCompletion from './pages/InterviewCompletion';
 import DashboardPage from './pages/DashboardPage.jsx';
 
 const App = () => {
@@ -59,6 +60,14 @@ const App = () => {
               }
             />
             <Route
+              path="/interview-completion"
+              element={
+                <ProtectedRoute>
+                  <InterviewCompletion />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/dashboard"
               element={
                 <ProtectedRoute>
@@ -68,7 +77,7 @@ const App = () => {
             />
 
             {/* Catch all route */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
           <ToastContainer
             position="top-right"
