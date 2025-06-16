@@ -293,24 +293,15 @@ const InterviewRoom = () => {
       stopSpeaking();
 
       // Complete the interview and generate report
-      const response = await api.post(`/interview/${interviewId}/complete`);
+      await api.post(`/interview/${interviewId}/complete`);
       
-      console.log('Interview completed:', response.data);
-      
-      // Show success message
-      if (response.data.email_sent) {
-        alert('Interview completed successfully! Report has been sent via email.');
-      } else {
-        alert('Interview completed successfully! Report generated but email sending failed.');
-      }
+      // Always navigate to completion page
+      navigate('/interview-completion');
 
-      // Clear authentication and redirect to login
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      navigate('/login');
     } catch (err) {
       console.error('Error ending interview:', err);
-      setError('Failed to complete interview properly. Please try again.');
+      // Even if there's an error, still navigate to completion page
+      navigate('/interview-completion');
     }
   };
 
