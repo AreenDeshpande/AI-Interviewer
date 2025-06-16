@@ -1183,11 +1183,14 @@ def complete_interview(interview_id):
         # If no document was updated, another process is already completing it
         if not result:
             print(f"Interview {interview_id} already being completed or email already sent")
+            # Return the existing report content if available
+            existing_interview = db.interviews.find_one({'interview_id': interview_id})
             return jsonify({
                 'message': 'Interview already completed or being processed',
                 'report_generated': True,
-                'email_sent': True,
-                'candidate_name': interview.get('candidate_name', 'Candidate')
+                'email_sent': existing_interview.get('report_sent', False),
+                'candidate_name': existing_interview.get('candidate_name', 'Candidate'),
+                'report_content': existing_interview.get('report_content', 'Report not available')
             })
         
         # Get user details
@@ -1317,10 +1320,13 @@ SCORE: Pending manual review
         # Check if our update was successful
         if update_result.modified_count == 0:
             print(f"Interview completion collision detected for {interview_id}")
+            # Retrieve the latest interview data to return correct report
+            latest_interview = db.interviews.find_one({'interview_id': interview_id})
             return jsonify({
                 'message': 'Interview was completed by another process',
                 'report_generated': True,
-                'email_sent': True,
+                'email_sent': latest_interview.get('report_sent', False),
+                'report_content': latest_interview.get('report_content', 'Report not available')
             })
         
         print(f"Interview {interview_id} completion processed successfully")
@@ -1330,6 +1336,7 @@ SCORE: Pending manual review
             'report_generated': True,
             'email_sent': email_sent,
             'candidate_name': candidate_name,
+            'report_content': report_content  # Return the report content in the response
         })
         
     except Exception as e:
@@ -1346,13 +1353,19 @@ def next_question(interview_id):
         interview = db.interviews.find_one({'interview_id': interview_id})
         if not interview:
             return jsonify({'message': 'Interview not found'}), 404
-            
+        
+        # Get question played status from request
+        data = request.get_json() or {}
+        is_new_question = data.get('is_new_question', True)
+        
         # Create a new manager instance from interview data
         manager = InterviewManager.from_interview(interview)
         manager.current_question_index = interview.get('current_question_index', 0)
         
-        # Move to next question
-        manager.current_question_index += 1
+        # If this is a new question, increment the index
+        if is_new_question:
+            manager.current_question_index += 1
+            
         if manager.current_question_index >= len(manager.questions):
             manager.update_interview_status('completed')
             return jsonify({
@@ -1363,14 +1376,16 @@ def next_question(interview_id):
             
         # Update status
         manager.update_interview_status('in_progress', {
-            'current_question_index': manager.current_question_index
+            'current_question_index': manager.current_question_index,
+            'question_played': not is_new_question  # Track if question has been played
         })
         
         return jsonify({
-            'message': 'Moved to next question',
+            'message': 'Moved to next question' if is_new_question else 'Current question refreshed',
             'has_more_questions': True,
             'current_question_index': manager.current_question_index,
-            'question': manager.questions[manager.current_question_index]
+            'question': manager.questions[manager.current_question_index],
+            'question_played': not is_new_question  # Indicate if question has been played
         })
         
     except Exception as e:
