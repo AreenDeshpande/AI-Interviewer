@@ -68,6 +68,12 @@ const InterviewRoom = () => {
         // Start polling for interview status
         startStatusPolling();
 
+        // Speak the first question if available
+        if (questions && questions.length > 0) {
+          setCurrentQuestion(questions[0]);
+          speakText(questions[0]);
+        }
+
         setLoading(false);
       } catch (err) {
         setError('Failed to initialize interview room. Please try again.');
