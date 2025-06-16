@@ -1627,6 +1627,21 @@ AI Interviewer System
         print(traceback.format_exc())
         return False
 
+@app.route('/api/me', methods=['GET'])
+@token_required
+def get_current_user(current_user):
+    """Get current user information."""
+    try:
+        # Return user data without sensitive information
+        return jsonify({
+            'id': str(current_user['_id']),
+            'email': current_user['email'],
+            'name': current_user.get('name', '')
+        })
+    except Exception as e:
+        print(f"Error getting current user: {str(e)}")
+        return jsonify({'message': 'Error retrieving user data'}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)
 
