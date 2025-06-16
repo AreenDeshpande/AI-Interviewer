@@ -7,8 +7,8 @@ load_dotenv()
 
 msg = MIMEMultipart()
 msg['Subject'] = "Interview Summary - John Doe"
-msg['From'] = 'areendeshpande@gmail.com'
-msg['To'] = 'areendeshpande@gmail.com'
+msg['From'] = 'piyushkrishna11@gmail.com'
+msg['To'] = 'piyushkrishna11@gmail.com'
 
 with open(r"backend\sample.pdf", "rb") as file:
     part = MIMEApplication(file.read(), Name="report.pdf")
@@ -16,6 +16,6 @@ with open(r"backend\sample.pdf", "rb") as file:
     msg.attach(part)
 
 with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-    smtp.login('areendeshpande@gmail.com',os.getenv("GMAIL_PASS"))
+    smtp.login('piyushkrishna11@gmail.com',os.getenv("GMAIL_PASS"))
     smtp.send_message(msg)
     print("Email sent successfully!")

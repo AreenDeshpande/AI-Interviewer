@@ -68,6 +68,12 @@ const InterviewRoom = () => {
         // Start polling for interview status
         startStatusPolling();
 
+        // Speak the first question if available
+        if (questions && questions.length > 0) {
+          setCurrentQuestion(questions[0]);
+          speakText(questions[0]);
+        }
+
         setLoading(false);
       } catch (err) {
         setError('Failed to initialize interview room. Please try again.');
@@ -287,24 +293,15 @@ const InterviewRoom = () => {
       stopSpeaking();
 
       // Complete the interview and generate report
-      const response = await api.post(`/interview/${interviewId}/complete`);
+      await api.post(`/interview/${interviewId}/complete`);
       
-      console.log('Interview completed:', response.data);
-      
-      // Show success message
-      if (response.data.email_sent) {
-        alert('Interview completed successfully! Report has been sent via email.');
-      } else {
-        alert('Interview completed successfully! Report generated but email sending failed.');
-      }
+      // Always navigate to completion page
+      navigate('/interview-completion');
 
-      // Clear authentication and redirect to login
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      navigate('/login');
     } catch (err) {
       console.error('Error ending interview:', err);
-      setError('Failed to complete interview properly. Please try again.');
+      // Even if there's an error, still navigate to completion page
+      navigate('/interview-completion');
     }
   };
 
@@ -518,10 +515,13 @@ const InterviewRoom = () => {
     }
   };
 
+  // Update the speakText function to use the correct voice
   const speakText = (text) => {
     if (!text || !selectedVoice) return;
 
     try {
+      console.log("Speaking text:", text);
+      
       // Cancel any ongoing speech
       stopSpeaking();
 
@@ -537,11 +537,13 @@ const InterviewRoom = () => {
 
       // Handle speech events
       utterance.onstart = () => {
+        console.log("Speech started");
         setIsSpeaking(true);
         setBotStatus('Speaking...');
       };
 
       utterance.onend = () => {
+        console.log("Speech ended");
         setIsSpeaking(false);
         setBotStatus('Ready');
         utteranceRef.current = null;
@@ -552,30 +554,24 @@ const InterviewRoom = () => {
         setIsSpeaking(false);
         setBotStatus('Error speaking');
         utteranceRef.current = null;
-
-        // Try to recover from error
-        if (event.error === 'interrupted' || event.error === 'canceled') {
-          // These are expected errors when stopping speech
-          return;
-        }
-
-        // For other errors, try to speak again after a short delay
-        setTimeout(() => {
-          if (text === currentQuestion) {
-            speakText(text);
-          }
-        }, 1000);
       };
 
       // Speak the text
       speechSynthesisRef.current.speak(utterance);
-
     } catch (err) {
       console.error('Error in speakText:', err);
       setIsSpeaking(false);
       setBotStatus('Error speaking');
     }
   };
+
+  // Make sure questions are automatically spoken when they change
+  useEffect(() => {
+    if (currentQuestion && !isSpeaking) {
+      console.log("Auto-speaking question:", currentQuestion);
+      speakText(currentQuestion);
+    }
+  }, [currentQuestion, selectedVoice]);
 
   const stopSpeaking = () => {
     try {
