@@ -210,29 +210,62 @@ def transcribe_audio(audio_file_path):
     try:
         print(f"Starting Whisper transcription for: {audio_file_path}")
         
-        # Load Whisper model (using base model for balance of speed and accuracy)
+        # Verify file exists before processing
+        if not os.path.exists(audio_file_path):
+            print(f"ERROR: Audio file does not exist: {audio_file_path}")
+            return f"Error: Audio file not found at {audio_file_path}"
+            
+        # Get absolute path to ensure no path resolution issues
+        audio_file_path = os.path.abspath(audio_file_path)
+        print(f"Using absolute path: {audio_file_path}")
+        
+        # File size verification
+        file_size = os.path.getsize(audio_file_path)
+        print(f"Audio file size: {file_size} bytes")
+        if file_size == 0:
+            return "Error: Audio file is empty (0 bytes)"
+        
+        # Convert audio to wav format using FFmpeg directly
+        wav_path = os.path.join(os.path.dirname(audio_file_path), 
+                              f"whisper_temp_{uuid.uuid4().hex}.wav")
+        
+        print(f"Converting audio to WAV format at: {wav_path}")
+        
+        # Use FFmpeg to convert the audio with explicit path
+        ffmpeg_path = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+        ffmpeg_cmd = [
+            ffmpeg_path,
+            "-i", audio_file_path,
+            "-ar", "16000",  # Sample rate
+            "-ac", "1",      # Mono channel
+            "-y",            # Overwrite if exists
+            wav_path
+        ]
+        
+        print(f"Running FFmpeg command: {' '.join(ffmpeg_cmd)}")
+        import subprocess
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        
+        # Verify the WAV file was created
+        if not os.path.exists(wav_path):
+            print(f"ERROR: FFmpeg failed to create WAV file at {wav_path}")
+            return "Error: Failed to convert audio format"
+            
+        print(f"WAV file created successfully: {wav_path}")
+        print(f"WAV file size: {os.path.getsize(wav_path)} bytes")
+        
+        # Load Whisper model
+        print("Loading Whisper model...")
         model = whisper.load_model("base")
         
-        # Convert audio to wav format if needed for better compatibility
-        audio = AudioSegment.from_file(audio_file_path)
-        
-        # Normalize audio levels and ensure proper format
-        audio = audio.normalize()
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        
-        wav_path = audio_file_path.replace('.mp3', '.wav').replace('.m4a', '.wav').replace('.webm', '.wav')
-        audio.export(wav_path, format="wav")
-        
-        print(f"Audio converted to WAV format: {wav_path}")
-        
         # Transcribe using Whisper
-        result = model.transcribe(wav_path, language='en')
+        print(f"Transcribing audio...")
+        result = model.transcribe(wav_path)
         transcription = result["text"].strip()
         
         print(f"=== WHISPER TRANSCRIPTION RESULT ===")
         print(f"Original audio file: {audio_file_path}")
         print(f"Transcribed text: '{transcription}'")
-        print(f"Confidence: {result.get('confidence', 'N/A')}")
         print(f"=====================================")
         
         if not transcription:
@@ -241,15 +274,24 @@ def transcribe_audio(audio_file_path):
         
         return transcription
         
+    except FileNotFoundError as e:
+        error_msg = f"Audio file not found error: {str(e)}"
+        print(error_msg)
+        return f"Error during Whisper transcription: {error_msg}"
+    except subprocess.CalledProcessError as e:
+        error_msg = f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}"
+        print(error_msg)
+        return f"Error during audio conversion: {error_msg}"
     except Exception as e:
-        print(f"Error transcribing audio with Whisper: {str(e)}")
+        error_msg = f"Error transcribing audio: {str(e)}"
+        print(error_msg)
         import traceback
         print(traceback.format_exc())
         return f"Error during Whisper transcription: {str(e)}"
     finally:
         # Clean up temporary wav file
         try:
-            if 'wav_path' in locals() and wav_path != audio_file_path and os.path.exists(wav_path):
+            if 'wav_path' in locals() and os.path.exists(wav_path):
                 os.remove(wav_path)
                 print(f"Cleaned up temporary file: {wav_path}")
         except Exception as cleanup_error:
@@ -266,13 +308,13 @@ def generate_interview_report(interview_data):
         # Create Q&A pairs
         for i, question in enumerate(questions):
             # Find corresponding response
-            response = None
-            for r in responses:
-                if r.get('question_index') == i:
-                    response = r
-                    break
+            response = next((r for r in responses if r.get('question_index') == i), None)
             
             answer = response.get('transcription', 'No response recorded') if response else 'No response recorded'
+            # Skip error messages in the analysis
+            if answer.startswith('Error during Whisper transcription'):
+                answer = 'No valid response recorded'
+                
             qa_pairs.append(f"Q{i+1}: {question}\nA{i+1}: {answer}")
         
         interview_text = "\n\n".join(qa_pairs)
@@ -325,225 +367,271 @@ RESPONSES SUMMARY:
         for i, question in enumerate(questions):
             response = next((r for r in responses if r.get('question_index') == i), None)
             answer = response.get('transcription', 'No response') if response else 'No response'
+            if answer.startswith('Error during Whisper transcription'):
+                answer = 'No valid response recorded'
+                
             fallback_report += f"\nQ{i+1}: {question}\nA{i+1}: {answer[:100]}{'...' if len(answer) > 100 else ''}\n"
         
         fallback_report += "\n\nRECOMMENDATION: Manual review required\nSCORE: Pending detailed analysis"
         
         return fallback_report
 
-def create_pdf_report(report_content, candidate_name="Candidate"):
+def create_pdf_report(report_content, candidate_name="Candidate", status="Pending Review", score="N/A"):
     """Create PDF report from text content."""
     try:
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        
+        # Initialize PDF document
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=letter,
+            title=f"Interview Report - {candidate_name}",
+            author="Lsoys Apps & Games - AI Interviewer System",
+            subject="Interview Assessment"
+        )
+        
+        # Extract score from report content if not provided
+        if score == "N/A" and "SCORE:" in report_content:
+            # Try to find the score in the report
+            score_line = [line for line in report_content.split('\n') if "SCORE:" in line]
+            if score_line:
+                try:
+                    score = score_line[0].split("SCORE:")[1].strip()
+                except:
+                    score = "N/A"
+        
+        # Get style sheets and define custom styles
         styles = getSampleStyleSheet()
         
-        # Custom styles
+        # Company header style
+        company_style = ParagraphStyle(
+            'CompanyHeader',
+            parent=styles['Heading1'],
+            fontSize=16,
+            alignment=1,  # Center alignment
+            textColor='#1A237E',  # Dark blue
+            fontName='Helvetica-Bold',
+            spaceAfter=6
+        )
+        
+        # Title style
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
             fontSize=18,
-            spaceAfter=30,
+            spaceAfter=5,
+            alignment=1,  # Center alignment
+            textColor='#1A237E'  # Dark blue
         )
         
+        # Subtitle style (candidate name)
+        subtitle_style = ParagraphStyle(
+            'Subtitle',
+            parent=styles['Heading2'],
+            fontSize=14,
+            alignment=1,  # Center
+            spaceAfter=10
+        )
+        
+        # Status box style
+        status_style = ParagraphStyle(
+            'StatusStyle',
+            parent=styles['Heading2'],
+            fontSize=12,
+            alignment=1,  # Center
+            textColor='white',
+            backColor=get_status_color(status),
+            borderWidth=1,
+            borderColor='#333333',
+            borderPadding=5,
+            borderRadius=4,
+            spaceAfter=10
+        )
+        
+        # Score style
+        score_style = ParagraphStyle(
+            'ScoreStyle',
+            parent=styles['Heading2'],
+            fontSize=14,
+            alignment=1,  # Center
+            textColor='#333333',
+            spaceAfter=5
+        )
+        
+        # Date style
+        date_style = ParagraphStyle(
+            'DateStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            alignment=1,  # Center
+            textColor='#666666',
+            spaceAfter=15
+        )
+        
+        # Section heading style
         heading_style = ParagraphStyle(
             'CustomHeading',
             parent=styles['Heading2'],
             fontSize=14,
-            spaceAfter=12,
+            spaceBefore=12,
+            spaceAfter=8,
+            textColor='#283593',  # Indigo
+            borderWidth=0,
+            borderColor='#C5CAE9',
+            borderPadding=5,
+            borderRadius=2
         )
         
+        # Subheading style
+        subheading_style = ParagraphStyle(
+            'CustomSubheading',
+            parent=styles['Heading3'],
+            fontSize=12,
+            spaceAfter=8,
+            textColor='#303F9F'  # Darker indigo
+        )
+        
+        # Body text style
         body_style = ParagraphStyle(
             'CustomBody',
             parent=styles['Normal'],
-            fontSize=12,
+            fontSize=10,
             spaceAfter=12,
             alignment=TA_JUSTIFY,
+            leading=14  # Line spacing
+        )
+        
+        # Question style
+        question_style = ParagraphStyle(
+            'QuestionStyle',
+            parent=styles['Normal'],
+            fontSize=11,
+            fontName='Helvetica-Bold',
+            spaceAfter=2,
+            textColor='#1A237E',
+            leftIndent=10
+        )
+        
+        # Answer style
+        answer_style = ParagraphStyle(
+            'AnswerStyle',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=12,
+            leftIndent=20,
+            leading=14  # Line spacing
+        )
+        
+        # Footer style
+        footer_style = ParagraphStyle(
+            'FooterStyle',
+            parent=styles['Normal'],
+            fontSize=8,
+            alignment=1,  # Center
+            textColor='#666666'
         )
         
         # Build PDF content
         story = []
-        story.append(Paragraph(f"Interview Assessment Report - {candidate_name}", title_style))
-        story.append(Spacer(1, 20))
+        
+        # Add company header
+        story.append(Paragraph("LSOYS APPS & GAMES", company_style))
+        
+        # Add title
+        story.append(Paragraph("INTERVIEW ASSESSMENT REPORT", title_style))
+        
+        # Add candidate name
+        story.append(Paragraph(f"Candidate: {candidate_name}", subtitle_style))
+        
+        # Add status box
+        story.append(Paragraph(f"Status: {status}", status_style))
+        
+        # Add score prominently
+        story.append(Paragraph(f"SCORE: {score}", score_style))
+        
+        # Add date and time
+        current_time = datetime.now().strftime("%B %d, %Y at %H:%M")
+        story.append(Paragraph(f"Generated on: {current_time}", date_style))
+        
+        # Add horizontal line
+        story.append(Spacer(1, 10))
         
         # Split report into sections and format
         sections = report_content.split('\n')
-        for section in sections:
-            if section.strip():
-                if section.strip().isupper() and len(section.strip()) < 50:
-                    story.append(Paragraph(section.strip(), heading_style))
-                else:
-                    story.append(Paragraph(section.strip(), body_style))
+        current_section = None
+        in_qa_section = False
+        skip_score_section = False  # Skip the original score section since we've moved it to the top
         
+        for section in sections:
+            if not section.strip():
+                story.append(Spacer(1, 6))
+                continue
+            
+            # Skip the original score section
+            if "SCORE:" in section:
+                skip_score_section = True
+                continue
+                
+            if skip_score_section and section.strip() and not section.strip().isupper():
+                skip_score_section = False
+                
+            if skip_score_section:
+                continue
+                
+            if "INTERVIEW QUESTIONS & ANSWERS" in section:
+                in_qa_section = True
+                story.append(Spacer(1, 10))
+                story.append(Paragraph(section.strip(), heading_style))
+                story.append(Spacer(1, 10))
+                continue
+            
+            if in_qa_section:
+                if section.strip().startswith("Question"):
+                    story.append(Paragraph(section.strip(), question_style))
+                elif section.strip().startswith("Response:"):
+                    story.append(Paragraph(section.strip(), answer_style))
+            elif section.strip().isupper() and len(section.strip()) < 50:
+                # This is a section heading
+                current_section = section.strip()
+                story.append(Spacer(1, 10))
+                story.append(Paragraph(current_section, heading_style))
+                story.append(Spacer(1, 5))
+            else:
+                story.append(Paragraph(section.strip(), body_style))
+        
+        # Add footer with attribution and website link
+        story.append(Spacer(1, 20))
+
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Generated by AI Interviewer | www.lsoysappsandgames.com/ai-interviewer", footer_style))
+        
+        # Build the document
         doc.build(story)
         buffer.seek(0)
         return buffer
     except Exception as e:
         print(f"Error creating PDF: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return None
 
-def send_report_email(report_pdf, candidate_name="Candidate", recipient_email="areendeshpande@gmail.com"):
-    """Send interview report via email."""
-    try:
-        msg = MIMEMultipart()
-        msg['Subject'] = f"Interview Assessment Report - {candidate_name}"
-        msg['From'] = 'areendeshpande@gmail.com'
-        msg['To'] = recipient_email
-        
-        # Email body
-        body = f"""
-        Dear Hiring Manager,
-        
-        Please find attached the comprehensive interview assessment report for {candidate_name}.
-        
-        The report includes:
-        - Candidate overview
-        - Strengths and areas for improvement
-        - Technical and communication skills assessment
-        - Overall recommendation and scoring
-        
-        This report was generated automatically by AssessAI based on the candidate's interview responses.
-        
-        Best regards,
-        AssessAI System
-        """
-        
-        msg.attach(MIMEText(body, 'plain'))
-        
-        # Attach PDF report
-        if report_pdf:
-            part = MIMEApplication(report_pdf.getvalue(), Name=f"{candidate_name}_Interview_Report.pdf")
-            part['Content-Disposition'] = f'attachment; filename="{candidate_name}_Interview_Report.pdf"'
-            msg.attach(part)
-        
-        # Send email
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login('areendeshpande@gmail.com', os.getenv("GMAIL_PASS"))
-            smtp.send_message(msg)
-            print(f"Report sent successfully to {recipient_email}")
-            return True
-    except Exception as e:
-        print(f"Error sending email: {str(e)}")
-        return False
+# Helper function to determine status color
+def get_status_color(status):
+    """Return color code based on candidate status."""
+    status = status.lower()
+    if "selected" in status:
+        return "#4CAF50"  # Green
+    elif "next round" in status:
+        return "#2196F3"  # Blue
+    elif "rejected" in status:
+        return "#F44336"  # Red
+    elif "not good" in status:
+        return "#FF9800"  # Orange
+    elif "good in another role" in status:
+        return "#9C27B0"  # Purple
+    else:
+        return "#757575"  # Grey for pending/unknown
 
-def generate_twilio_token(identity, room_name):
-    """Generate Twilio Access Token for video room."""
-    try:
-        # Create an Access Token
-        token = AccessToken(
-            TWILIO_ACCOUNT_SID,
-            TWILIO_API_KEY,
-            TWILIO_API_SECRET,
-            identity=identity
-        )
-        
-        # Create a Video grant and add to token
-        video_grant = VideoGrant(room=room_name)
-        token.add_grant(video_grant)
-        
-        # Generate the token and convert to string
-        return str(token.to_jwt())
-    except Exception as e:
-        print(f"Error generating Twilio token: {str(e)}")
-        raise Exception("Failed to generate access token for video room")
-
-def create_interview_room(interview_id, user_id):
-    """Create a new Twilio video room for the interview."""
-    try:
-        # Create a unique room name using interview_id
-        room_name = f"interview-{interview_id}"
-        
-        # Create the room using Twilio client
-        room = twilio_client.video.v1.rooms.create(
-            unique_name=room_name,
-            type='group',  # Using 'group' type as it's currently supported
-            record_participants_on_connect=True,
-            status_callback='https://your-domain.com/status-callback',  # Replace with your callback URL
-            status_callback_method='POST'
-        )
-        
-        # Generate tokens for both user and bot
-        user_token = generate_twilio_token(f"user-{user_id}", room_name)
-        bot_token = generate_twilio_token(f"bot-{interview_id}", room_name)
-        
-        return {
-            'room_name': room_name,
-            'room_sid': room.sid,
-            'user_token': user_token,
-            'bot_token': bot_token
-        }
-    except Exception as e:
-        print(f"Error creating interview room: {str(e)}")
-        raise Exception("Failed to create video interview room")
-
-class InterviewManager:
-    def __init__(self, room_name, interview_id, questions):
-        self.room_name = room_name
-        self.interview_id = interview_id
-        self.questions = questions
-        self.current_question_index = 0
-        self.client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        
-    @classmethod
-    def from_interview(cls, interview):
-        """Create an InterviewManager instance from interview data."""
-        return cls(
-            room_name=interview['room_name'],
-            interview_id=interview['interview_id'],
-            questions=interview['questions']
-        )
-        
-    def start(self):
-        """Initialize the interview room."""
-        try:
-            print(f"Starting interview in room: {self.room_name}")
-            
-            # Ensure room exists
-            try:
-                room = self.client.video.v1.rooms(self.room_name).fetch()
-            except TwilioRestException as e:
-                if e.code == 20404:  # Room not found
-                    # Create the room if it doesn't exist
-                    room = self.client.video.v1.rooms.create(
-                        unique_name=self.room_name,
-                        type='group',
-                        record_participants_on_connect=True
-                    )
-                    print(f"Created new room: {self.room_name}")
-                else:
-                    raise
-            
-            # Update interview status
-            self.update_interview_status('ready')
-            print("Interview room is ready")
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error starting interview: {str(e)}")
-            self.update_interview_status('error', {'error_message': str(e)})
-            return False
-            
-    def update_interview_status(self, status, data=None):
-        """Update the interview status in the database."""
-        try:
-            update_data = {
-                'status': status,
-                'current_question_index': self.current_question_index
-            }
-            if data:
-                update_data.update(data)
-                
-            db.interviews.update_one(
-                {'interview_id': self.interview_id},
-                {'$set': update_data}
-            )
-            print(f"Updated interview status to: {status}")
-            
-        except Exception as e:
-            print(f"Error updating interview status: {str(e)}")
-
-# User routes
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -740,7 +828,7 @@ def get_interview_questions(current_user):
 def interview_room(interview_id):
     """Get interview room data."""
     try:
-        # Find interview by interview_id instead of _id
+        # Find interview by interview_id
         interview = db.interviews.find_one({'interview_id': interview_id})
         if not interview:
             print(f"Interview not found: {interview_id}")
@@ -918,6 +1006,7 @@ def get_token(interview_id):
 @app.route('/interview/<interview_id>/record-response', methods=['POST'])
 def record_response(interview_id):
     """Record and transcribe candidate response."""
+    temp_audio_path = None
     try:
         # Find interview by interview_id
         interview = db.interviews.find_one({'interview_id': interview_id})
@@ -933,20 +1022,27 @@ def record_response(interview_id):
         
         print(f"Processing audio for question {question_index} in interview {interview_id}")
         
+        # Create unique filename with timestamp to avoid overwriting
+        timestamp = int(time.time())
+        temp_filename = f"audio_{interview_id}_{question_index}_{timestamp}"
+        
         # Save audio file temporarily with proper extension
         import base64
         try:
             # Handle different audio formats
             if 'data:audio/webm' in audio_blob:
                 audio_data = base64.b64decode(audio_blob.split(',')[1])
-                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.webm")
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"{temp_filename}.webm")
             elif 'data:audio/wav' in audio_blob:
                 audio_data = base64.b64decode(audio_blob.split(',')[1])
-                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.wav")
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"{temp_filename}.wav")
             else:
                 # Default to webm
                 audio_data = base64.b64decode(audio_blob.split(',')[1])
-                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"temp_audio_{interview_id}_{question_index}.webm")
+                temp_audio_path = os.path.join(UPLOAD_FOLDER, f"{temp_filename}.webm")
+            
+            # Ensure the upload folder exists
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
             
             print(f"Saving audio to: {temp_audio_path}")
             print(f"Audio data size: {len(audio_data)} bytes")
@@ -955,10 +1051,15 @@ def record_response(interview_id):
                 f.write(audio_data)
             
             # Verify file was written
-            if not os.path.exists(temp_audio_path) or os.path.getsize(temp_audio_path) == 0:
-                return jsonify({'message': 'Failed to save audio file'}), 500
+            if not os.path.exists(temp_audio_path):
+                return jsonify({'message': 'Failed to save audio file - file not found'}), 500
+                
+            if os.path.getsize(temp_audio_path) == 0:
+                return jsonify({'message': 'Failed to save audio file - file size is 0 bytes'}), 500
             
-            print(f"Audio file saved successfully, size: {os.path.getsize(temp_audio_path)} bytes")
+            print(f"Audio file saved successfully at {temp_audio_path}")
+            print(f"File size: {os.path.getsize(temp_audio_path)} bytes")
+            print(f"File exists check: {os.path.exists(temp_audio_path)}")
             
         except Exception as audio_error:
             print(f"Error saving audio: {audio_error}")
@@ -968,14 +1069,6 @@ def record_response(interview_id):
         print("Starting transcription...")
         transcription = transcribe_audio(temp_audio_path)
         print(f"Transcription result: {transcription}")
-        
-        # Clean up temporary file
-        try:
-            if os.path.exists(temp_audio_path):
-                os.remove(temp_audio_path)
-                print("Temporary audio file cleaned up")
-        except Exception as cleanup_error:
-            print(f"Error cleaning up audio file: {cleanup_error}")
         
         if not transcription:
             transcription = "No speech detected in audio recording"
@@ -1023,6 +1116,18 @@ def record_response(interview_id):
         import traceback
         print(traceback.format_exc())
         return jsonify({'message': f'Error: {str(e)}'}), 500
+    finally:
+        # Clean up temporary file ONLY after transcription is complete
+        try:
+            if temp_audio_path and os.path.exists(temp_audio_path):
+                # Keep the file for debugging if there was an error in the transcription
+                if "Error during Whisper transcription" not in str(transcription):
+                    os.remove(temp_audio_path)
+                    print(f"Cleaned up audio file: {temp_audio_path}")
+                else:
+                    print(f"Keeping audio file for debugging: {temp_audio_path}")
+        except Exception as cleanup_error:
+            print(f"Error cleaning up audio file: {cleanup_error}")
 
 @app.route('/interview/<interview_id>/complete', methods=['POST'])
 def complete_interview(interview_id):
@@ -1036,11 +1141,32 @@ def complete_interview(interview_id):
             print(f"Interview not found: {interview_id}")
             return jsonify({'message': 'Interview not found'}), 404
         
-        # Check if interview is already completed to prevent duplicate emails
-        if interview.get('status') == 'completed' and interview.get('report_sent'):
-            print(f"Interview {interview_id} already completed and report sent")
+        # Enhanced duplicate check: Check completion status and report_sent flag
+        # Use an atomic update with a unique completion ID to prevent race conditions
+        completion_id = str(uuid.uuid4())
+        
+        # Use findAndModify (find_one_and_update) to atomically check and update
+        # Only proceed if the interview is not already completed or email not sent
+        result = db.interviews.find_one_and_update(
+            {
+                'interview_id': interview_id, 
+                '$or': [
+                    {'status': {'$ne': 'completed'}},
+                    {'report_sent': {'$ne': True}}
+                ]
+            },
+            {'$set': {
+                'completion_process_id': completion_id,
+                'completion_started_at': datetime.now(timezone.utc)
+            }},
+            return_document=False
+        )
+        
+        # If no document was updated, another process is already completing it
+        if not result:
+            print(f"Interview {interview_id} already being completed or email already sent")
             return jsonify({
-                'message': 'Interview already completed',
+                'message': 'Interview already completed or being processed',
                 'report_generated': True,
                 'email_sent': True,
                 'candidate_name': interview.get('candidate_name', 'Candidate')
@@ -1087,6 +1213,21 @@ def complete_interview(interview_id):
             interview['responses'] = responses
             print("Created dummy responses for empty interview")
         
+        # Create Q&A section for the report
+        qa_section = "INTERVIEW QUESTIONS & ANSWERS:\n\n"
+        questions = interview.get('questions', [])
+        for i, question in enumerate(questions):
+            # Find corresponding response
+            response = None
+            for r in responses:
+                if r.get('question_index') == i:
+                    response = r
+                    break
+            
+            answer = response.get('transcription', 'No response recorded') if response else 'No response recorded'
+            qa_section += f"Question {i+1}: {question}\n"
+            qa_section += f"Response: {answer}\n\n"
+        
         # Generate report
         print("Generating interview report...")
         report_content = generate_interview_report(interview)
@@ -1108,11 +1249,7 @@ INTERVIEW SUMMARY:
 The candidate participated in an AI-conducted interview session. Due to technical limitations, 
 detailed analysis could not be completed automatically.
 
-QUESTIONS ASKED:
-{chr(10).join([f"{i+1}. {q}" for i, q in enumerate(interview.get('questions', []))])}
-
-RESPONSES:
-{chr(10).join([f"Q{r.get('question_index', 0)+1}: {r.get('transcription', 'No response')}" for r in responses])}
+{qa_section}
 
 RECOMMENDATION:
 Manual review recommended for final assessment.
@@ -1120,24 +1257,35 @@ Manual review recommended for final assessment.
 SCORE: Pending manual review
 """
             print("Using fallback report due to AI generation failure")
+        else:
+            # Append the Q&A section to the AI-generated report
+            report_content += f"\n\n{qa_section}"
         
         # Create PDF report
         print("Creating PDF report...")
         pdf_buffer = create_pdf_report(report_content, candidate_name)
         
+        # Check if report already sent to prevent duplicate emails
+        report_already_sent = interview.get('report_sent', False)
+        
         # Send email with report (only if not already sent)
         email_sent = False
-        if pdf_buffer and not interview.get('report_sent'):
+        if pdf_buffer and not report_already_sent:
             print("Sending email with report...")
-            email_sent = send_report_email(pdf_buffer, candidate_name)
+            email_sent = send_report_email(pdf_buffer, candidate_name, recipient_email="piyushkrishna11@gmail.com")
             print(f"Email sent: {email_sent}")
+        elif report_already_sent:
+            print("Skipping email send - report was already sent previously")
+            email_sent = True
         else:
-            print("Skipping email (already sent or PDF creation failed)")
-            email_sent = interview.get('report_sent', False)
+            print("Skipping email (PDF creation failed)")
         
-        # Update interview status
-        db.interviews.update_one(
-            {'interview_id': interview_id},
+        # Update interview status with completion ID to ensure this process is still the active one
+        update_result = db.interviews.update_one(
+            {
+                'interview_id': interview_id,
+                'completion_process_id': completion_id  # Ensure we're still the active process
+            },
             {'$set': {
                 'status': 'completed',
                 'completed_at': datetime.now(timezone.utc),
@@ -1148,6 +1296,15 @@ SCORE: Pending manual review
             }}
         )
         
+        # Check if our update was successful
+        if update_result.modified_count == 0:
+            print(f"Interview completion collision detected for {interview_id}")
+            return jsonify({
+                'message': 'Interview was completed by another process',
+                'report_generated': True,
+                'email_sent': True,
+            })
+        
         print(f"Interview {interview_id} completion processed successfully")
         
         return jsonify({
@@ -1155,9 +1312,6 @@ SCORE: Pending manual review
             'report_generated': True,
             'email_sent': email_sent,
             'candidate_name': candidate_name,
-            'total_questions': len(interview.get('questions', [])),
-            'total_responses': len(responses),
-            'report_preview': report_content[:300] + '...' if len(report_content) > 300 else report_content
         })
         
     except Exception as e:
@@ -1205,5 +1359,241 @@ def next_question(interview_id):
         print(f"Error moving to next question: {str(e)}")
         return jsonify({'message': f'Error: {str(e)}'}), 500
 
+class InterviewManager:
+    """Manages the interview process and state."""
+    
+    def __init__(self, room_name, interview_id, questions):
+        self.room_name = room_name
+        self.interview_id = interview_id
+        self.questions = questions
+        self.current_question_index = 0
+        self.status = 'ready'
+    
+    @classmethod
+    def from_interview(cls, interview):
+        """Create an InterviewManager instance from an interview document."""
+        return cls(
+            room_name=interview.get('room_name', f"interview-{interview['interview_id']}"),
+            interview_id=interview['interview_id'],
+            questions=interview.get('questions', [])
+        )
+    
+    def start(self):
+        """Start the interview."""
+        self.status = 'in_progress'
+        self.update_interview_status('in_progress')
+        print(f"Started interview {self.interview_id} with {len(self.questions)} questions")
+    
+    def update_interview_status(self, status, additional_data=None):
+        """Update the interview status in the database."""
+        try:
+            update_data = {'status': status}
+            
+            # Add any additional data to the update
+            if additional_data:
+                for key, value in additional_data.items():
+                    update_data[key] = value
+            
+            # Update the interview document
+            result = db.interviews.update_one(
+                {'interview_id': self.interview_id},
+                {'$set': update_data}
+            )
+            
+            self.status = status
+            print(f"Updated interview {self.interview_id} status to {status}, modified: {result.modified_count}")
+            
+            return result.modified_count > 0
+        except Exception as e:
+            print(f"Error updating interview status: {str(e)}")
+            return False
+def create_interview_room(interview_id, user_id):
+    """Create a Twilio video room for an interview and generate token."""
+    try:
+        # Generate a unique room name
+        room_name = f"interview-{interview_id}"
+        
+        # Check if room already exists
+        try:
+            # Try to fetch the room (will throw an exception if it doesn't exist)
+            room = twilio_client.video.v1.rooms(room_name).fetch()
+            print(f"Room {room_name} already exists with SID: {room.sid}")
+        except TwilioRestException as e:
+            if e.status == 404:
+                # Room doesn't exist, create it
+                room = twilio_client.video.v1.rooms.create(
+                    unique_name=room_name,
+                    type='group',
+                    record_participants_on_connect=False,
+                    status_callback=f"https://yourserver.com/room-callback/{interview_id}",
+                    max_participants=3  # Candidate, interviewer, and supervisor
+                )
+                print(f"Created new room: {room_name} with SID: {room.sid}")
+            else:
+                # Some other error occurred
+                raise e
+        
+        # Generate token for the user
+        token = AccessToken(
+            TWILIO_ACCOUNT_SID, 
+            TWILIO_API_KEY, 
+            TWILIO_API_SECRET, 
+            identity=f"user-{user_id}"
+        )
+        
+        # Add video grant to the token
+        video_grant = VideoGrant(room=room_name)
+        token.add_grant(video_grant)
+        
+        # Generate JWT token
+        jwt_token = token.to_jwt()
+        
+        if isinstance(jwt_token, bytes):
+            jwt_token = jwt_token.decode()
+        
+        return {
+            'room_name': room_name,
+            'user_token': jwt_token
+        }
+        
+    except Exception as e:
+        print(f"Error creating interview room: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise e
+
+# Set FFmpeg path
+FFMPEG_PATH = r"C:\Users\HP\Downloads\ffmpeg-2025-06-11-git-f019dd69f0-essentials_build\ffmpeg-2025-06-11-git-f019dd69f0-essentials_build\bin"
+os.environ["PATH"] = FFMPEG_PATH + os.pathsep + os.environ["PATH"]
+
+# Also set the paths directly for pydub
+AudioSegment.converter = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+AudioSegment.ffmpeg = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+AudioSegment.ffprobe = os.path.join(FFMPEG_PATH, "ffprobe.exe")
+
+print(f"FFmpeg path set to: {FFMPEG_PATH}")
+
+@app.route('/test-ffmpeg', methods=['GET'])
+def test_ffmpeg():
+    """Test if FFmpeg is properly configured."""
+    try:
+        # Check if ffmpeg exists
+        ffmpeg_path = os.path.join(FFMPEG_PATH, "ffmpeg.exe")
+        ffmpeg_exists = os.path.exists(ffmpeg_path)
+        
+        # Run ffmpeg -version command
+        import subprocess
+        result = subprocess.run(
+            [ffmpeg_path, "-version"], 
+            capture_output=True, 
+            text=True
+        )
+        
+        return jsonify({
+            'ffmpeg_exists': ffmpeg_exists,
+            'ffmpeg_path': ffmpeg_path,
+            'version_output': result.stdout,
+            'status': 'FFmpeg is properly configured' if result.returncode == 0 else 'FFmpeg test failed',
+            'return_code': result.returncode
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc(),
+            'status': 'FFmpeg test failed'
+        }), 500
+
+def send_report_email(report_pdf, candidate_name="Candidate", recipient_email="piyushkrishna11@gmail.com"):
+    """Send interview report via email."""
+    try:
+        print(f"Preparing to send email to {recipient_email} for candidate {candidate_name}")
+        
+        # Create a unique email ID based on candidate name and timestamp
+        email_id = f"{candidate_name.lower().replace(' ', '_')}_{int(time.time())}"
+        
+        # Check if we've already sent this email recently (within last hour)
+        # Use MongoDB to track sent emails
+        existing_email = db.sent_emails.find_one({
+            'candidate_name': candidate_name,
+            'recipient': recipient_email,
+            'sent_at': {'$gt': datetime.now(timezone.utc) - timedelta(hours=1)}
+        })
+        
+        if existing_email:
+            print(f"Email already sent to {recipient_email} for {candidate_name} within the last hour")
+            return True  # Return success since we're preventing a duplicate
+        
+        print(f"Creating email with ID: {email_id}")
+        
+        msg = MIMEMultipart()
+        msg['Subject'] = f"Interview Assessment Report - {candidate_name}"
+        msg['From'] = 'piyushkrishna11@gmail.com'
+        msg['To'] = recipient_email
+        msg['Date'] = datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000")
+        msg['Message-ID'] = f"<{email_id}@assessai.com>"
+        
+        # Email body with interview details
+        body = f"""
+Dear Hiring Manager,
+
+Please find attached the comprehensive interview assessment report for {candidate_name}.
+
+The report includes:
+- Candidate overview
+- Strengths and areas for improvement
+- Technical and communication skills assessment
+- Complete transcript of questions and answers
+- Overall recommendation and scoring
+
+This report was generated automatically by AssessAI based on the candidate's interview responses.
+
+Best regards,
+Lsoys Apps & Games
+AI Interviewer System
+        """
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Attach PDF report
+        if report_pdf:
+            print(f"Attaching PDF report for {candidate_name}")
+            part = MIMEApplication(report_pdf.getvalue(), Name=f"{candidate_name}_Interview_Report.pdf")
+            part['Content-Disposition'] = f'attachment; filename="{candidate_name}_Interview_Report.pdf"'
+            msg.attach(part)
+        else:
+            print("Warning: No PDF report to attach")
+            
+        # Get Gmail password from environment
+        gmail_password = os.getenv("GMAIL_PASS")
+        if not gmail_password:
+            print("Error: GMAIL_PASS environment variable not set")
+            return False
+        
+        print(f"Connecting to Gmail SMTP server...")
+        
+        # Send email
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login('piyushkrishna11@gmail.com', gmail_password)
+            smtp.send_message(msg)
+            
+            # Record the sent email in database
+            db.sent_emails.insert_one({
+                'candidate_name': candidate_name,
+                'recipient': recipient_email,
+                'subject': f"Interview Assessment Report - {candidate_name}",
+                'sent_at': datetime.now(timezone.utc),
+                'email_id': email_id
+            })
+            
+            print(f"Email sent successfully to {recipient_email} with ID {email_id}")
+            return True
+    except Exception as e:
+        print(f"Error sending email: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return False
+
 if __name__ == '__main__':
     app.run(debug=True)
+
