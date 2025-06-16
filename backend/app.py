@@ -135,59 +135,77 @@ def extract_text_from_pdf(file_path):
         return None
 
 def parse_resume_with_openai(resume_text):
-    """Parse resume using OpenAI to extract key information as a simple array."""
+    """Parse resume using OpenAI to extract key information."""
     try:
         response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": """Extract key information from the resume. 
-                Return ONLY an array of strings, with each string containing one piece of information.
-                Include skills, experience highlights, education, and projects.
-                Example format:
-                Skills: JavaScript, React, Node.js
-                Experience: Senior Developer at Tech Corp (2020-2023)
-                Education: BS Computer Science, University of Tech
-                Project: Built e-commerce platform using MERN stack"""},
+                Focus on:
+                1. Technical skills and programming languages
+                2. Work experience and projects
+                3. Education and certifications
+                4. Notable achievements
+                
+                Format the response as a structured summary that can be used to generate relevant interview questions."""},
                 {"role": "user", "content": f"Parse this resume and extract key information:\n\n{resume_text}"}
             ],
             temperature=0.3,
-            max_tokens=1000
+            max_tokens=500
         )
-        # Split the response into an array of strings
-        return response.choices[0].message.content.strip().split('\n')
+        
+        parsed_data = response.choices[0].message.content.strip()
+        print("Successfully parsed resume with OpenAI")
+        return parsed_data
+        
     except Exception as e:
         print(f"Error parsing resume with OpenAI: {str(e)}")
         return None
 
 def generate_interview_questions(resume_text):
-    """Generate a fixed set of interview questions for testing."""
-    # Comment out the OpenAI parsing and question generation
-    """
+    """Generate interview questions based on resume content using OpenAI."""
     try:
         # Parse resume with OpenAI
         resume_data = parse_resume_with_openai(resume_text)
         if not resume_data:
             raise Exception("Failed to parse resume")
         
-        # Generate interview questions
-        questions = generate_interview_questions(resume_data)
-        if not questions:
-            raise Exception("Failed to generate interview questions")
+        # Generate interview questions based on parsed resume data
+        response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": """You are an expert technical interviewer. 
+                Based on the candidate's resume information, generate 2 relevant technical interview questions.
+                The questions should be specific to their experience and skills.
+                Return ONLY an array of 2 questions, nothing else."""},
+                {"role": "user", "content": f"Generate 2 technical interview questions based on this resume information:\n\n{resume_data}"}
+            ],
+            temperature=0.7,
+            max_tokens=200
+        )
         
+        # Extract questions from response
+        questions = response.choices[0].message.content.strip().split('\n')
+        # Clean up questions (remove numbers, extra spaces, etc.)
+        questions = [q.strip().lstrip('1234567890.- ') for q in questions if q.strip()]
+        
+        # Ensure we have exactly 2 questions
+        if len(questions) > 2:
+            questions = questions[:2]
+        elif len(questions) < 2:
+            # Add a fallback question if we don't have enough
+            questions.append("Tell me about your most challenging technical project and how you overcame the obstacles.")
+        
+        print(f"Generated {len(questions)} questions from resume")
         return questions
+        
     except Exception as e:
         print(f"Error generating interview questions: {str(e)}")
-        return None
-    """
-    
-    # Return a fixed set of interview questions for testing
-    return [
-        "Tell me about yourself and your background in software development.",
-        "What programming languages are you most comfortable with, and why?",
-        "Describe a challenging project you worked on and how you overcame obstacles.",
-        "How do you stay updated with the latest technologies and industry trends?",
-        "Where do you see yourself in your career in the next 5 years?"
-    ]
+        # Return fallback questions if there's an error
+        return [
+            "Tell me about your most challenging technical project and how you overcame the obstacles.",
+            "What technical skills are you most proud of and why?"
+        ]
 
 def get_next_question(interview_id, current_question_index):
     """Get the next question for the interview."""
