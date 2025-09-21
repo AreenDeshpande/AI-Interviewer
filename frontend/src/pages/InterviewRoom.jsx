@@ -52,6 +52,18 @@ const InterviewRoom = () => {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [recordedChunks, setRecordedChunks] = useState([]);
   const recordingTimeoutRef = useRef(null);
+  // Add a new ref for the local video container
+  const localVideoRef = useRef(null);
+  // Add this state to track camera availability
+  const [isCameraAvailable, setIsCameraAvailable] = useState(true);
+  const [participants, setParticipants] = useState([]);
+  const [remoteVideoTrack, setRemoteVideoTrack] = useState(null);
+  const [remoteAudioTrack, setRemoteAudioTrack] = useState(null);
+  const [room, setRoom] = useState(null);
+
+  // Create refs for remote media containers
+  const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
 
 
   useEffect(() => {
@@ -86,12 +98,35 @@ const InterviewRoom = () => {
 
     // Cleanup function
     return () => {
+      console.log('Cleaning up interview room...');
+      
+      // Disconnect from room
       if (roomRef.current) {
         roomRef.current.disconnect();
+        console.log('Disconnected from Twilio room');
       }
+      
+      // Stop local tracks
       if (localTrackRef.current) {
-        localTrackRef.current.stop();
+        if (localTrackRef.current.video) {
+          localTrackRef.current.video.stop();
+          console.log('Stopped local video track');
+        }
+        if (localTrackRef.current.audio) {
+          localTrackRef.current.audio.stop();
+          console.log('Stopped local audio track');
+        }
       }
+      
+      // Detach remote tracks
+      if (remoteVideoTrack) {
+        remoteVideoTrack.detach().forEach(element => element.remove());
+      }
+      if (remoteAudioTrack) {
+        remoteAudioTrack.detach().forEach(element => element.remove());
+      }
+      
+      // Clear intervals and timeouts
       if (statusPollIntervalRef.current) {
         clearInterval(statusPollIntervalRef.current);
       }
@@ -101,6 +136,9 @@ const InterviewRoom = () => {
       if (recordingTimeoutRef.current) {
         clearTimeout(recordingTimeoutRef.current);
       }
+      
+      // Stop any speech synthesis
+      stopSpeaking();
     };
   }, [interviewId]);
 
@@ -144,28 +182,58 @@ const InterviewRoom = () => {
     try {
       // Create local audio and video tracks with fallbacks
       let localTracks = [];
+      let localVideoTrack = null;
+      let localAudioTrack = null;
 
       try {
         // Try to get camera and mic tracks, but don't fail if we can't
-        const videoTrack = await Twilio.createLocalVideoTrack({
+        localVideoTrack = await Twilio.createLocalVideoTrack({
           name: 'camera',
           // Lower resolution to improve performance
           width: 640,
           height: 480,
         }).catch(err => {
           console.log('Could not access camera:', err);
+          setIsCameraAvailable(false);
           return null;
         });
 
-        const audioTrack = await Twilio.createLocalAudioTrack({
+        localAudioTrack = await Twilio.createLocalAudioTrack({
           name: 'microphone',
         }).catch(err => {
           console.log('Could not access microphone:', err);
           return null;
         });
 
-        if (videoTrack) localTracks.push(videoTrack);
-        if (audioTrack) localTracks.push(audioTrack);
+        if (localVideoTrack) {
+          localTracks.push(localVideoTrack);
+          
+          // Attach the video track to the DOM element
+          if (localVideoRef.current) {
+            // Clear any existing content
+            localVideoRef.current.innerHTML = '';
+            
+            // Create a new video element and attach the track to it
+            const videoElement = localVideoTrack.attach();
+            videoElement.style.width = '100%';
+            videoElement.style.height = '100%';
+            videoElement.style.objectFit = 'cover';
+            
+            // Add the video element to the container
+            localVideoRef.current.appendChild(videoElement);
+            
+            console.log('Local video track attached to DOM');
+          }
+        }
+        
+        if (localAudioTrack) localTracks.push(localAudioTrack);
+        
+        // Store local tracks for later use (muting, etc.)
+        localTrackRef.current = {
+          video: localVideoTrack,
+          audio: localAudioTrack
+        };
+        
       } catch (err) {
         console.log('Error creating local tracks:', err);
         // Continue without local tracks
@@ -175,18 +243,12 @@ const InterviewRoom = () => {
       const room = await Twilio.connect(token, {
         name: roomName,
         tracks: localTracks,
-        // Don't require tracks to be published
-        publishTrack: false,
-        // Allow reconnection
-        enableDominantSpeaker: true,
-        dominantSpeaker: true,
-        networkQuality: {
-          local: 1,
-          remote: 1
-        }
+        // Publish tracks if available
+        automaticSubscription: true
       });
 
       roomRef.current = room;
+      setRoom(room);
       setIsConnected(true);
       console.log('Connected to room:', room.name);
 
@@ -206,13 +268,30 @@ const InterviewRoom = () => {
         console.log('Track subscribed:', track.kind, 'from', participant.identity);
         if (track.kind === 'video') {
           setRemoteVideoTrack(track);
+          // Attach video track to DOM if container exists
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.innerHTML = '';
+            const videoElement = track.attach();
+            videoElement.style.width = '100%';
+            videoElement.style.height = '100%';
+            remoteVideoRef.current.appendChild(videoElement);
+          }
         } else if (track.kind === 'audio') {
           setRemoteAudioTrack(track);
+          // Attach audio track to DOM
+          if (remoteAudioRef.current) {
+            remoteAudioRef.current.innerHTML = '';
+            const audioElement = track.attach();
+            remoteAudioRef.current.appendChild(audioElement);
+          }
         }
       });
 
       room.on('trackUnsubscribed', (track, publication, participant) => {
         console.log('Track unsubscribed:', track.kind, 'from', participant.identity);
+        // Detach the track element
+        track.detach().forEach(element => element.remove());
+        
         if (track.kind === 'video') {
           setRemoteVideoTrack(null);
         } else if (track.kind === 'audio') {
@@ -586,6 +665,43 @@ const InterviewRoom = () => {
     }
   };
 
+  // Add this function to your component
+  const testCameraAccess = async () => {
+    try {
+      setBotStatus('Testing camera access...');
+      
+      // Request camera access
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: true, 
+        audio: true 
+      });
+      
+      console.log('Camera access granted!', stream);
+      
+      // Create a temporary video element to test the stream
+      const tempVideo = document.createElement('video');
+      tempVideo.srcObject = stream;
+      tempVideo.autoplay = true;
+      
+      // Wait for video to start playing
+      await new Promise(resolve => {
+        tempVideo.onplaying = resolve;
+      });
+      
+      // Stop the stream after testing
+      stream.getTracks().forEach(track => track.stop());
+      
+      alert('Camera is working! Video stream created successfully.');
+      setBotStatus('Camera test passed');
+      setIsCameraAvailable(true);
+    } catch (error) {
+      console.error('Camera test failed:', error);
+      alert(`Camera test failed: ${error.message}. Please check your camera permissions.`);
+      setBotStatus('Camera test failed');
+      setIsCameraAvailable(false);
+    }
+  };
+
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="100vh">
@@ -635,7 +751,33 @@ const InterviewRoom = () => {
           mb: 3
         }}
       >
-        <div id="local-media" className="video-container" />
+        {/* This is the container for the local video */}
+        <div 
+          ref={localVideoRef} 
+          className="video-container" 
+          style={{
+            width: '100%',
+            height: '100%',
+            position: 'relative'
+          }}
+        />
+        
+        {/* Add these somewhere in your Paper element that contains video */}
+        <div 
+          ref={remoteVideoRef} 
+          className="remote-video" 
+          style={{
+            display: remoteVideoTrack ? 'block' : 'none',
+            position: 'absolute',
+            width: '100%',
+            height: '100%',
+            top: 0,
+            left: 0,
+            zIndex: 5
+          }}
+        />
+        <div ref={remoteAudioRef} style={{ display: 'none' }}></div>
+
         {currentQuestion && (
           <Box sx={{ 
             position: 'absolute', 
@@ -682,6 +824,13 @@ const InterviewRoom = () => {
           </Tooltip>
         </Box>
       </Paper>
+
+      {/* Alert for camera availability */}
+      {!isCameraAvailable && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Camera access is not available. Please check your camera permissions and refresh the page.
+        </Alert>
+      )}
 
       {/* Recording Controls */}
       {isConnected && currentQuestion && (
@@ -747,6 +896,16 @@ const InterviewRoom = () => {
           End Interview
         </Button>
       </Box>
+
+      {/* Add this button somewhere in your UI for debugging */}
+      <Button 
+        variant="outlined" 
+        onClick={testCameraAccess} 
+        startIcon={<VideocamIcon />}
+        sx={{ mt: 2 }}
+      >
+        Test Camera
+      </Button>
     </Container>
   );
 };

@@ -5,6 +5,20 @@ import { jwtDecode } from 'jwt-decode';
 // Configure axios with base URL
 axios.defaults.baseURL = 'http://localhost:5000';
 
+// Set up axios interceptor for adding token to requests
+axios.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 const AuthContext = createContext(null);
 
 export const useAuth = () => {
@@ -25,22 +39,29 @@ export const AuthProvider = ({ children }) => {
       try {
         const token = localStorage.getItem('access_token');
         if (token) {
-          const decoded = jwtDecode(token);
-          if (decoded.exp * 1000 > Date.now()) {
-            // Token is valid, get user info
-            const response = await axios.get('/api/me', {
-              headers: { Authorization: `Bearer ${token}` }
-            });
-            setUser(response.data);
-          } else {
-            // Token expired, try to refresh
-            await refreshToken();
+          try {
+            const decoded = jwtDecode(token);
+            if (decoded.exp * 1000 > Date.now()) {
+              // Token is valid, get user info
+              const response = await axios.get('/api/me', {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              setUser(response.data);
+            } else {
+              // Token expired, clear it
+              localStorage.removeItem('access_token');
+              setUser(null);
+            }
+          } catch (decodeError) {
+            console.error('Token decode error:', decodeError);
+            localStorage.removeItem('access_token');
+            setUser(null);
           }
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
         localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
+        setUser(null);
       } finally {
         setLoading(false);
       }
@@ -48,30 +69,6 @@ export const AuthProvider = ({ children }) => {
 
     initializeAuth();
   }, []);
-
-  const refreshToken = async () => {
-    try {
-      const refresh_token = localStorage.getItem('refresh_token');
-      if (!refresh_token) throw new Error('No refresh token');
-
-      const response = await axios.post('/api/refresh', {
-        refresh_token
-      });
-
-      const { access_token } = response.data;
-      localStorage.setItem('access_token', access_token);
-
-      const decoded = jwtDecode(access_token);
-      const userResponse = await axios.get('/api/me', {
-        headers: { Authorization: `Bearer ${access_token}` }
-      });
-      setUser(userResponse.data);
-    } catch (error) {
-      console.error('Token refresh error:', error);
-      logout();
-      throw error;
-    }
-  };
 
   const login = async (email, password) => {
     try {
@@ -84,27 +81,6 @@ export const AuthProvider = ({ children }) => {
       const { token, user: userData } = response.data;
       localStorage.setItem('access_token', token);
       setUser(userData);
-
-      // Set up axios interceptor for token refresh
-      axios.interceptors.response.use(
-        (response) => response,
-        async (error) => {
-          const originalRequest = error.config;
-          if (error.response.status === 401 && !originalRequest._retry) {
-            originalRequest._retry = true;
-            try {
-              await refreshToken();
-              const newToken = localStorage.getItem('access_token');
-              originalRequest.headers.Authorization = `Bearer ${newToken}`;
-              return axios(originalRequest);
-            } catch (refreshError) {
-              logout();
-              return Promise.reject(refreshError);
-            }
-          }
-          return Promise.reject(error);
-        }
-      );
 
       // Set default authorization header
       axios.defaults.headers.common.Authorization = `Bearer ${token}`;
@@ -133,7 +109,6 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
     delete axios.defaults.headers.common.Authorization;
     setUser(null);
   };
@@ -144,8 +119,7 @@ export const AuthProvider = ({ children }) => {
     error,
     login,
     signup,
-    logout,
-    refreshToken
+    logout
   };
 
   return (

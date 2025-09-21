@@ -8,7 +8,7 @@ import './styles/variables.css';  // Import CSS variables
 
 import theme from './theme';
 import { AuthProvider } from './contexts/AuthContext';
-import ProtectedRoute from './components/auth/ProtectedRoute';
+import PrivateRoute from './components/PrivateRoute';
 
 // Auth Pages
 import LoginPage from './pages/auth/LoginPage.jsx';
@@ -35,62 +35,36 @@ const App = () => {
             <Route path="/signup" element={<SignupPage />} />
 
             {/* Protected Routes */}
-            <Route
-              path="/instructions"
-              element={
-                <ProtectedRoute>
-                  <InterviewInstructionsPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/upload-resume"
-              element={
-                <ProtectedRoute>
-                  <ResumeUploadPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/interview/:interviewId"
-              element={
-                <ProtectedRoute>
-                  <InterviewRoom />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/interview-completion"
-              element={
-                <ProtectedRoute>
-                  <InterviewCompletion />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <DashboardPage />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/dashboard" element={
+              <PrivateRoute>
+                <DashboardPage />
+              </PrivateRoute>
+            } />
+            <Route path="/upload-resume" element={
+              <PrivateRoute>
+                <ResumeUploadPage />
+              </PrivateRoute>
+            } />
+            <Route path="/interview-instructions" element={
+              <PrivateRoute>
+                <InterviewInstructionsPage />
+              </PrivateRoute>
+            } />
+            <Route path="/interview/:interviewId" element={
+              <PrivateRoute>
+                <InterviewRoom />
+              </PrivateRoute>
+            } />
+            <Route path="/interview-completion" element={
+              <PrivateRoute>
+                <InterviewCompletion />
+              </PrivateRoute>
+            } />
 
             {/* Catch all route */}
-            <Route path="*" element={<Navigate to="/login" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-          <ToastContainer
-            position="top-right"
-            autoClose={5000}
-            hideProgressBar={false}
-            newestOnTop
-            closeOnClick
-            rtl={false}
-            pauseOnFocusLoss
-            draggable
-            pauseOnHover
-            theme="light"
-          />
+          <ToastContainer />
         </Router>
       </AuthProvider>
     </ThemeProvider>

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
@@ -48,9 +47,9 @@ const LoginPage = () => {
       setIsLoading(true);
       try {
         await login(values.email, values.password);
-        navigate('/instructions');
+        navigate('/interview-instructions');
       } catch (error) {
-        // Error is handled by the auth context
+        console.error('Login error:', error);
       } finally {
         setIsLoading(false);
       }
